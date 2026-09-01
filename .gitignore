@@ -1,0 +1,15 @@
+# binaries
+/bin/
+*.exe
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# eval output
+evals/results/
+*.results.json
+
+# local
+.DS_Store

@@ -1,0 +1,8 @@
+--- /Users/jeffreygaggino/.claude/skills/grill-with-docs/SKILL.md	2026-07-15 05:01:01
++++ /Users/jeffreygaggino/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3/skills/engineering/grill-with-docs/SKILL.md	2026-09-01 17:51:21
+@@ -4,4 +4,4 @@
+ disable-model-invocation: true
+ ---
+ 
+-Run a `/grilling` session, using the `/domain-modeling` skill.
++Call the Skill tool twice, for "grilling" and "domain-modeling".
