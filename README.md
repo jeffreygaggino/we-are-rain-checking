@@ -83,7 +83,7 @@ Two upstreams, both free and keyless — deliberately, so there are two independ
 
 ### Why this substrate is interesting rather than a toy
 
-- **Caching is forced by the constraint, not decorative.** 30 req/min is a hard ceiling, so cache-aside with a TTL is required rather than tasteful. Hit rate is measurable.
+- **Caching is forced by the constraint, not decorative** — but by a different constraint than it first looks. OpenF1's 30 req/min ceiling binds *ingest*, which is a batch job that can simply sleep; the correlation endpoint reads Postgres and never touches OpenF1 at serve time. The cache that has to exist is on the **forecast** path, where Open-Meteo is hit live on request. Cache-aside with a TTL, hit rate measurable.
 - **The join is real work.** Weather is a time series; results are one row per driver per session. Correlating them needs a windowed aggregate joined to the classification — actual SQL and index design.
 - **Two upstreams force the question that matters:** what does the endpoint return when one is down and the other isn't?
 - **The demo is live.** "Next race" changes on its own, which proves it isn't hardcoded.
@@ -123,9 +123,9 @@ The pipeline is the artifact; the URL is just proof it ran.
 
 **In:** rate-limit-aware resumable ingest · Postgres schema, migrations, deliberate indexes · response cache with a recorded hit rate · correlation endpoint · next-race forecast · one in-repo skill · evals for two targets · GitHub Actions · Tailscale deploy.
 
-**Out:** a frontend of any kind · publishing a marketplace of one (consuming and *measuring* a real one is the more interesting half).
+**Out:** publishing a marketplace of one (consuming and *measuring* a real one is the more interesting half).
 
-**Deferred:** hooks. First one to add: `PreToolUse` refusing edits to an already-applied migration — the guardrail is what makes the speed safe. Read `misc/git-guardrails-claude-code` first; it may already do this.
+**Deferred:** a frontend, to display what the API returns — the backend ships first and CORS stays unbuilt until there's something to allow. Then hooks. First one to add: `PreToolUse` refusing edits to an already-applied migration — the guardrail is what makes the speed safe. Read `misc/git-guardrails-claude-code` first; it may already do this.
 
 **Later, if it earns the time:** OTel out of the eval runs into Grafana Cloud, plotting eval score over commits.
 
@@ -136,3 +136,17 @@ The pipeline is the artifact; the URL is just proof it ran.
 - The pack ships **35 skills but registers 25** — `in-progress/` and `misc/` are on disk but absent from `plugin.json`.
 - An explicit-only skill still costs always-on description tokens in every session but can never fire by itself. Whether that's a fair trade is exactly what the harness is for.
 - OpenF1 404s rather than returning empty on an invalid query, which makes "no data" and "bad request" look identical until you check the body.
+- **`rainfall` is a binary flag, not a magnitude.** Across all 82 races with weather data the only values present are `{0, 1}`. Drizzle and a downpour are the same number, so rain *intensity* is not measurable from this source at all.
+- **`driver_number` is not a driver.** Number `1` belongs to the reigning champion, so it resolves to Verstappen for 2023–2025 and Norris for 2026; `3` covers both Ricciardo and Verstappen. Keying on it merges two people — and it does so quietly, which is the dangerous part. See ADR-0003.
+- **The headline question is answered, and the answer is no.** Measured before writing any Go, across 2023–2026 (2022 is a hard 404):
+
+  | test | result |
+  |---|---|
+  | rain → winner (Verstappen) | +1pp wet vs dry |
+  | rain → winner (Norris) | +20pp, ≈1.2 SE — noise at n=9 |
+  | rain → retirements | t = 0.89 |
+  | wind → retirements | r = −0.087, r² = 0.008 |
+  | wind → winner | 48% vs 44% |
+
+  Nine wet races in four seasons is the ceiling, and no further ingest raises it. The correlation endpoint's honest output is *insufficient sample* — which is the result the honesty constraint above was written to permit, arriving before a line of code rather than after a launch.
+- **The first version of that table was wrong, and wrong persuasively.** Keying winners on `driver_number` showed a +10pp wet advantage for driver `1`. Resolving identity properly collapsed it to +1pp: the number had merged Verstappen's and Norris's wins. The bug presented itself as a finding, not as an error.
