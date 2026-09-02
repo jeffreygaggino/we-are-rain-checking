@@ -50,6 +50,11 @@ func TestThePackageSchemaSurvivesFromOneAcquisitionToTheNext(t *testing.T) {
 func TestACleanSlateEmptiesTheIngestedTablesAndKeepsTheSeededReferenceData(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 
+	// Counted rather than hardcoded: the property is that the truncation does not touch these, which
+	// holds whatever the corpus grows to, and a literal here would need editing every time it does.
+	circuitsBefore := countRows(t, conn, "circuits")
+	driversBefore := countRows(t, conn, "drivers")
+
 	if _, err := conn.Exec(`INSERT INTO f1.meetings
 		(meeting_key, year, name, official_name, circuit_id, country_name, location, date_start)
 		SELECT 1, 2023, 'Left Behind', 'Left Behind', id, 'Bahrain', 'Sakhir', now()
@@ -65,10 +70,10 @@ func TestACleanSlateEmptiesTheIngestedTablesAndKeepsTheSeededReferenceData(t *te
 			t.Errorf("f1.%s has %d rows on a clean slate, want 0", table, got)
 		}
 	}
-	if got := countRows(t, conn, "circuits"); got != seededCircuits {
-		t.Errorf("circuits = %d, want the %d seeded ones — reference data survives a clean slate", got, seededCircuits)
+	if got := countRows(t, conn, "circuits"); got != circuitsBefore {
+		t.Errorf("circuits = %d, want the %d that were there — reference data survives a clean slate", got, circuitsBefore)
 	}
-	if got := countRows(t, conn, "drivers"); got != seededDrivers {
-		t.Errorf("drivers = %d, want the %d seeded ones", got, seededDrivers)
+	if got := countRows(t, conn, "drivers"); got != driversBefore {
+		t.Errorf("drivers = %d, want the %d that were there", got, driversBefore)
 	}
 }

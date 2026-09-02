@@ -9,7 +9,6 @@ import (
 
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/config"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/db"
-	"github.com/jeffreygaggino/we-are-rain-checking/backend/models"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/tests"
 )
 
@@ -19,20 +18,14 @@ import (
 const (
 	verstappenID = "7948efdf-1ca6-4274-bc5e-b392565c13f0"
 	norrisID     = "d6588e29-d18d-43a3-85cd-3cb8c1e7d877"
-	ricciardoID  = "9ddf4757-e218-47c4-b8b2-04f340422893"
 	monzaID      = "d895bd57-b3c6-4f2f-b2a4-b5a013592277"
 	silverstone  = "d5ffead2-0555-4abc-b5f0-734ccd124d13"
 )
 
-// What 000002 seeds: every distinct Circuit across 2023-2026, and every Driver appearing in a Race in
-// the corpus. The harness truncates around these rather than reinserting them, so the numbers are
-// asserted both here and against a clean slate.
-const (
-	seededCircuits = 26
-	seededDrivers  = 29
-)
-
-func TestMigrationsApplyAndCreateEverySchemaObject(t *testing.T) {
+// The tables are not asserted here. A missing one fails every test that queries it, naming the query
+// that broke — so a loop over information_schema would only restate 000001 and report the same
+// breakage less clearly. The indexes are the opposite, and are the reason this test exists.
+func TestMigrationsApplyCleanlyAndCreateEveryIndex(t *testing.T) {
 	conn, cfg := tests.RequireDB(t)
 
 	version, dirty, err := db.MigrateVersion(cfg)
@@ -46,19 +39,9 @@ func TestMigrationsApplyAndCreateEverySchemaObject(t *testing.T) {
 		t.Errorf("version = %d, want 2", version)
 	}
 
-	for _, table := range []string{"circuits", "drivers", "meetings", "sessions", "weather_samples", "session_results"} {
-		var exists bool
-		const q = `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'f1' AND table_name = $1)`
-		if err := conn.Get(&exists, q, table); err != nil {
-			t.Fatalf("checking table %s: %v", table, err)
-		}
-		if !exists {
-			t.Errorf("table f1.%s was not created", table)
-		}
-	}
-
-	// The indexes are deliberate choices, not defaults, so their absence is a regression worth
-	// naming. Reasoning for each lives in 000001 beside the table it serves.
+	// An index is invisible to correctness: drop one and every query still returns the right rows,
+	// slower. Nothing else in this suite would notice, which is what makes asserting them worth the
+	// lines. Reasoning for each lives in 000001 beside the table it serves.
 	for _, index := range []string{"sessions_date_start_idx", "sessions_year_name_idx", "session_results_driver_idx"} {
 		var exists bool
 		const q = `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'f1' AND indexname = $1)`
@@ -92,24 +75,15 @@ func TestIngestedTablesHaveNoSoftDeleteOrCreatorColumns(t *testing.T) {
 	}
 }
 
-func TestSeedPopulatesEveryCircuitAndDriverInTheCorpus(t *testing.T) {
+// Coordinates are seeded, not geocoded (ADR-0003), so a Circuit that reached the table without one
+// is a seed gap that no later code path would report — ingest resolves a Circuit by key and never
+// reads its position.
+//
+// The seeded row counts are deliberately not asserted. Their numbers change whenever the corpus
+// grows a season, and a test that has to be edited alongside the seed catches only the edit.
+func TestEverySeededCircuitCarriesItsCoordinates(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 
-	var circuits, drivers int
-	if err := conn.Get(&circuits, `SELECT COUNT(*) FROM f1.circuits`); err != nil {
-		t.Fatalf("counting circuits: %v", err)
-	}
-	if err := conn.Get(&drivers, `SELECT COUNT(*) FROM f1.drivers`); err != nil {
-		t.Fatalf("counting drivers: %v", err)
-	}
-	if circuits != seededCircuits {
-		t.Errorf("seeded %d circuits, want %d — every distinct circuit across 2023-2026", circuits, seededCircuits)
-	}
-	if drivers != seededDrivers {
-		t.Errorf("seeded %d drivers, want %d — every driver appearing in a Race in the corpus", drivers, seededDrivers)
-	}
-
-	// Coordinates are seeded, not geocoded, so every row must actually carry a position.
 	var missingCoords int
 	const q = `SELECT COUNT(*) FROM f1.circuits WHERE latitude = 0 AND longitude = 0`
 	if err := conn.Get(&missingCoords, q); err != nil {
@@ -120,46 +94,13 @@ func TestSeedPopulatesEveryCircuitAndDriverInTheCorpus(t *testing.T) {
 	}
 }
 
-// A Driver row carries both the upstream display name ingest resolves on and the short form, so
-// either can be shown without a second lookup.
-func TestSeededDriverCarriesBothResolutionNameAndShortForm(t *testing.T) {
+// The structural half of ADR-0003: a Racing Number cannot be an identity here because there is no
+// column it could be one in. Which seeded person holds which id is asserted where it can regress —
+// across a rebuild, below — and why the numbers collide is recorded in the ADR rather than restated
+// as a row-by-row expectation of the seed.
+func TestNoColumnLetsARacingNumberBecomeADriverIdentity(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 
-	var driver models.Driver
-	const q = `SELECT id, full_name, short_name, created_at, updated_at FROM f1.drivers WHERE id = $1`
-	if err := conn.Get(&driver, q, verstappenID); err != nil {
-		t.Fatalf("fetching seeded driver: %v", err)
-	}
-	if driver.FullName != "Max VERSTAPPEN" {
-		t.Errorf("full_name = %q, want %q", driver.FullName, "Max VERSTAPPEN")
-	}
-	if driver.ShortName != "VER" {
-		t.Errorf("short_name = %q, want %q", driver.ShortName, "VER")
-	}
-}
-
-// The point of ADR-0003 in one assertion: the Racing Numbers that collide across this corpus belong
-// to distinct seeded people. 1 covers both VERSTAPPEN and NORRIS; 3 covers both VERSTAPPEN and
-// RICCIARDO. Nothing in the schema lets those merge, because no seeded identity is a number.
-func TestCollidingRacingNumbersBelongToDistinctSeededDrivers(t *testing.T) {
-	conn, _ := tests.RequireDB(t)
-
-	ids := map[string]string{
-		verstappenID: "Max VERSTAPPEN",
-		norrisID:     "Lando NORRIS",
-		ricciardoID:  "Daniel RICCIARDO",
-	}
-	for id, wantName := range ids {
-		var name string
-		if err := conn.Get(&name, `SELECT full_name FROM f1.drivers WHERE id = $1`, id); err != nil {
-			t.Fatalf("fetching %s: %v", wantName, err)
-		}
-		if name != wantName {
-			t.Errorf("id %s resolves to %q, want %q", id, name, wantName)
-		}
-	}
-
-	// And there is no column a Racing Number could be an identity in.
 	var exists bool
 	const q = `SELECT EXISTS (
 		SELECT 1 FROM information_schema.columns
