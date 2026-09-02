@@ -19,10 +19,15 @@ TEST_ENV = DB_HOST=$(TEST_DB_HOST) DB_PORT=$(TEST_DB_PORT) DB_NAME=$(TEST_DB_NAM
 
 # ── Local development ─────────────────────────────────────────────────────────
 
-.PHONY: tidy build test local local-down migrate-up migrate-down
+.PHONY: tidy build docs run test local local-down migrate-up migrate-down
 tidy:  ; @go mod tidy
+docs:  ; @swag init
 build: ; @go build ./...
-local: ; @docker compose -f $(COMPOSE_LOCAL) up -d --wait
+run:   ; @go run .
+
+# The whole stack from one command: Postgres, the migrations applied, then the API. --wait returns
+# once the API's health check passes, so a green `make local` means the service answers.
+local: ; @docker compose -f $(COMPOSE_LOCAL) up -d --build --wait
 local-down: ; @docker compose -f $(COMPOSE_LOCAL) down
 
 migrate-up:   ; @go run ./cmd/migrate -direction up
@@ -30,8 +35,12 @@ migrate-down: ; @go run ./cmd/migrate -direction down
 
 # test-db brings up the local Postgres and creates the test database if it is missing. Tests apply
 # the migrations themselves, so this only has to hand them an empty database that exists.
+#
+# Postgres alone, not `local`: the tests drive the router in-process through httptest, so building
+# and running the API container would add a minute to `make test` and prove nothing extra.
 .PHONY: test-db
-test-db: local
+test-db:
+	@docker compose -f $(COMPOSE_LOCAL) up -d --wait postgres
 	@docker compose -f $(COMPOSE_LOCAL) exec -T postgres \
 		psql -U $(TEST_DB_USER) -d $(TEST_DB_USER) -tc \
 		"SELECT 1 FROM pg_database WHERE datname = '$(TEST_DB_NAME)'" | grep -q 1 || \
@@ -44,11 +53,17 @@ test: test-db
 # ── Gate ──────────────────────────────────────────────────────────────────────
 # One command answers "is this done". Scoped to this module, never repo-wide.
 
-.PHONY: gate fmt-check vet
+.PHONY: gate fmt-check vet docs-check
 fmt-check:
 	@test -z "$$(gofmt -l . | tee /dev/stderr)" || (echo "gofmt: files above need formatting" && exit 1)
 
 vet: ; @go vet ./...
 
-gate: fmt-check vet build test
+# The gate regenerates the spec rather than trusting the committed one, so a handler annotation
+# edited without regenerating shows up as a diff the human reads before committing.
+docs-check:
+	@command -v swag >/dev/null || (echo "swag: not installed — go install github.com/swaggo/swag/cmd/swag@latest" && exit 1)
+	@swag init --quiet
+
+gate: fmt-check vet docs-check build test
 	@echo "gate: green"

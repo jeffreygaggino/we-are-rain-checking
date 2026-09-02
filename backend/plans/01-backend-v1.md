@@ -5,19 +5,33 @@ non-obvious comments. Where this plan and `STRUCTURE-go-gin-backend.md` disagree
 
 ## Status
 
-Stopped deliberately after the database layer. Everything below the line is designed, not built.
+Stopped deliberately after the HTTP skeleton. Everything below the line is designed, not built.
 
 | ticket | state |
 |---|---|
 | #4 derivation functions | **done** — red-first, 100% covered |
 | #5 seed Circuits and Drivers | **done** — 26 Circuits, 29 Drivers, literal ids, stability test seen to fail |
-| #3 Postgres and migrations | **partial** — schema, migrations, DSN handling and the DB half of the harness are in; the health route and the HTTP seam are not |
-| #2 service skeleton | **not started** — no `main.go`, `routes/`, `handlers/`, no `swag` docs |
+| #2 service skeleton | **done** — `main.go`, `app/`, `routes/`, `handlers/`, generated `docs/` served at `/docs` |
+| #3 Postgres and migrations | **done** — the health route pings the database, the HTTP seam runs against real Postgres, and `make local` brings the whole stack up |
 | #6–#11 | not started |
 
-Consequences for what is written below: the endpoint, ingest, cache and client sections are the
-intended design and nothing more. The gate currently runs `gofmt`, `go vet`, `go build`, `go test`;
-`swag init` joins it with #2, when there is a handler annotation to generate from.
+Consequences for what is written below: the ingest, cache and client sections are the intended design
+and nothing more. Of the endpoint table, only `/health` exists.
+
+## Running it
+
+One command each, from `backend/`:
+
+| command | what it does |
+|---|---|
+| `make local` | the whole stack — Postgres, migrations applied, then the API. Returns once `/api/v1/health` answers, so a green run means the service works, not that two containers exist |
+| `make run` | the API alone against whatever `.env` points at |
+| `make test` | starts Postgres, creates the test database, runs every test |
+| `make gate` | format → vet → docs → build → test |
+| `make local-down` | stops the stack |
+
+Migrations are a one-shot compose service, not a startup step: the API image never migrates on boot,
+so "the schema changed" is always something with its own exit code.
 
 ## Fill-ins
 
@@ -30,8 +44,8 @@ intended design and nothing more. The gate currently runs `gofmt`, `go vet`, `go
 
 ## Deviations from STRUCTURE, and why
 
-STRUCTURE is a greenfield kickoff written for user-authored data behind an auth service. Four of its
-rules do not survive contact with this domain. Three are already ADRs; the fourth is new.
+STRUCTURE is a greenfield kickoff written for user-authored data behind an auth service. Seven of its
+rules do not survive contact with this domain. Three are already ADRs; the rest are new.
 
 1. **No `permissions/` package** (ADR-0001). Handlers begin at step 2 of the seven-step body. The
    seven steps are otherwise intact and in order.
@@ -43,10 +57,27 @@ rules do not survive contact with this domain. Three are already ADRs; the fourt
 4. **New leaf package `derive/`.** STRUCTURE's layout has no home for pure decision functions, but
    #4 names four of them as their own test surface. `models` is for shapes, `services` take a
    `ctx` and orchestrate; neither fits a `float64 -> bool`. `derive` imports `models` only.
+5. **The composition root is `app/`, not `main.go`.** STRUCTURE wires the graph in `main.go`, but a
+   `package main` cannot be imported, so the HTTP harness would have to re-wire it — two copies that
+   drift the first time an endpoint is added to one. `app.New(conn)` returns the router; `main.go`
+   keeps everything a test has no business doing (load config, connect, set the spec's host, serve).
+   It also takes the pool as an argument rather than reading `db.DB`, which is what lets a test hand
+   it a database that is not there.
+6. **`HealthService` calls `db.Ping` directly, with no `repository/` in between.** STRUCTURE's
+   dependency rule is `services -> repository -> db`, and this skips a layer. A health repository
+   would read no rows, and the thing it would wrap already exists: `db.Ping` bounds its own wait,
+   which is the property the route needs — an unreachable database has to answer the health check,
+   not hang it. The first repository arrives with #6, where there are rows to read; the rule holds
+   from there.
+7. **The docs route is registered in `routes.SetupRouter`,** where STRUCTURE puts it in `main.go`.
+   "One `SetupRouter`, all route registration" is the stronger of the two rules, and it means the
+   spec is served by the same object as the routes it documents — so a test can hold one against the
+   other, which is how "the docs reflect the health route" is asserted rather than assumed.
 
 One addition: **`tests/`**, holding the two agreed seams' harness (#3: "reusable by later tickets
 without modification"). Keeping it out of `handlers/` stops the harness being mistaken for a unit
-test of the handler package.
+test of the handler package. Seam 1 lives in `tests/http.go`: later tickets add a route to `app.New`
+and get the harness unchanged.
 
 ## Test seams — agreed, and nothing else
 
@@ -143,3 +174,7 @@ across a corpus that cannot grow, its ordinary output is that no Signal is prese
   dependency — and "Monza" geocodes to a town as readily as a circuit.
 - **Storing a rain magnitude.** `rainfall` is `{0,1}` across all four seasons. Any column implying
   intensity would be a lie at the source.
+- **Serving TLS from the API itself.** STRUCTURE's `main.go` branches on `TLS_CERT`/`TLS_KEY`, but
+  neither #2 nor #3 asks for it — every TLS criterion in #3 is about the *database* connection. A
+  second serving path that nothing configures and no test covers is a branch that rots. `router.Run`
+  only; terminating TLS is the deployment's job until a ticket says otherwise.

@@ -1,0 +1,7 @@
+.git
+tmp/
+*.md
+plans/
+.env
+.env.*
+!.env.example

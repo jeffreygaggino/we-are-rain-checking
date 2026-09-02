@@ -1,0 +1,63 @@
+basePath: /api/v1
+definitions:
+  models.ErrorResponse:
+    properties:
+      code:
+        example: 400
+        type: integer
+      message:
+        example: Failed response
+        type: string
+      success:
+        example: false
+        type: boolean
+    type: object
+  models.HealthReport:
+    properties:
+      database:
+        example: ok
+        type: string
+    type: object
+  models.HttpResponse:
+    properties:
+      code:
+        example: 200
+        type: integer
+      data: {}
+      message:
+        example: Successful response
+        type: string
+      success:
+        example: true
+        type: boolean
+    type: object
+info:
+  contact: {}
+  description: An honest weather-to-results service over four F1 seasons.
+  title: we-are-rain-checking API
+  version: "0.1"
+paths:
+  /health:
+    get:
+      description: 'Reports database connectivity, not process liveness: a 200 means
+        the database answered.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/models.HttpResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.HealthReport'
+              type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Health check
+      tags:
+      - health
+swagger: "2.0"
