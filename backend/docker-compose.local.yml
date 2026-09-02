@@ -1,0 +1,70 @@
+# Local database connection, shared by both containers. Every value here is local-only; the service
+# itself has no defaults for the credentials (config.mustEnv), which is why they are spelled out.
+x-db-env: &db-env
+  DB_HOST: postgres
+  # The in-network port, not the 55432 published to the host.
+  DB_PORT: 5432
+  DB_NAME: rainchecking
+  DB_USER: rainchecking
+  DB_PASSWORD: rainchecking
+  DB_SCHEMA: f1
+  # This compose Postgres serves no TLS. Every other environment keeps the default of require.
+  DB_SSLMODE: disable
+
+# Both containers are polled on the same cadence: a minute of retries at two-second intervals, which
+# is what `up --wait` spends before it gives up on the stack.
+x-healthcheck-timing: &healthcheck-timing
+  interval: 2s
+  timeout: 3s
+  retries: 30
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: rain-checking-postgres
+    environment:
+      POSTGRES_DB: rainchecking
+      POSTGRES_USER: rainchecking
+      # Local only. The service itself has no default for this — see config.mustEnv.
+      POSTGRES_PASSWORD: rainchecking
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD-SHELL", "pg_isready -U rainchecking -d rainchecking"]
+
+  # A one-shot, not a step inside the API's boot: applying the schema stays an explicit action with
+  # its own exit code. The API waits on it completing rather than racing it.
+  migrate:
+    build: .
+    container_name: rain-checking-migrate
+    entrypoint: ["migrate", "-direction", "up"]
+    environment: *db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    container_name: rain-checking-api
+    environment:
+      <<: *db-env
+      PORT: 8080
+      PUBLIC_URL: localhost:8080
+      API_BASE_PATH: /api/v1
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # The health route pings the database, so `up --wait` returning means the whole stack answers —
+    # not merely that two containers are running.
+    healthcheck:
+      <<: *healthcheck-timing
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/api/v1/health || exit 1"]
+
+volumes:
+  postgres-data:

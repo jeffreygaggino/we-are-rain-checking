@@ -1,6 +1,7 @@
 # binaries
 /bin/
 *.exe
+backend/tmp/
 
 # env / secrets
 .env
