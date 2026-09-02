@@ -426,7 +426,9 @@ func TestIngestPacesItsRequestsToTheConfiguredInterval(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	const interval = 40 * time.Millisecond
+	// Well clear of the database work the run interleaves between seasons — an unpaced run spans 15ms
+	// end to end — so the floor below still has teeth if pacing is removed.
+	const interval = 100 * time.Millisecond
 	for _, year := range coveredSeasons() {
 		setSeason(stub, year)
 	}
@@ -438,14 +440,19 @@ func TestIngestPacesItsRequestsToTheConfiguredInterval(t *testing.T) {
 
 	requests := stub.Requests()
 	if len(requests) < 4 {
-		t.Fatalf("served %d requests, want at least 4 to have a gap worth measuring", len(requests))
+		t.Fatalf("served %d requests, want at least 4 for the elapsed floor to mean anything", len(requests))
 	}
-	// Timer granularity, not pacing slack: the reservation itself is exact.
-	const tolerance = 5 * time.Millisecond
-	for i := 1; i < len(requests); i++ {
-		if gap := requests[i].At.Sub(requests[i-1].At); gap < interval-tolerance {
-			t.Errorf("requests %d and %d were %s apart, want at least %s", i-1, i, gap, interval)
-		}
+
+	// A slot reservation floors the run, never any one pair — plans/01-backend-v1.md, "Pacing is a
+	// slot reservation, not a sleep". The pair-wise assertion this replaces was already failing
+	// rather than merely over-strict: these timestamps are taken in the stub's handler, so each
+	// carries its own scheduling latency, and over thirty runs on an idle machine the worst pair came
+	// in at 22ms against a 40ms floor. Tolerance covers that jitter at the two endpoints and nothing
+	// else; worst slack measured over the same runs was 2.5ms.
+	const tolerance = 15 * time.Millisecond
+	want := time.Duration(len(requests)-1) * interval
+	if elapsed := requests[len(requests)-1].At.Sub(requests[0].At); elapsed < want-tolerance {
+		t.Errorf("%d requests spanned %s, want at least %s — %s apiece", len(requests), elapsed, want, interval)
 	}
 }
 
