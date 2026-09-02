@@ -492,7 +492,7 @@ func TestIngestStopsOnACancelledContextWithoutWriting(t *testing.T) {
 // ADR-0001: dropping the auth layer is only safe because the one operation worth protecting is not
 // on the API at all. This is that decision as an assertion.
 func TestNoHTTPRouteTriggersIngest(t *testing.T) {
-	harness := tests.RequireHarness(t)
+	harness := tests.RouterOnly(t)
 
 	for _, route := range harness.Router.Routes() {
 		if strings.Contains(strings.ToLower(route.Path), "ingest") {

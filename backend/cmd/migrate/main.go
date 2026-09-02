@@ -19,28 +19,22 @@ func main() {
 	config.LoadConfig()
 	cfg := config.GetConfig()
 
-	conn, err := db.Connect(cfg)
-	if err != nil {
-		log.Fatalf("migrate: connect (%s): %v", db.Describe(cfg), err)
-	}
-	defer func() { _ = conn.Close() }()
-
 	switch *direction {
 	case "up":
-		if err := db.MigrateUp(conn, cfg); err != nil {
-			log.Fatalf("migrate: up: %v", err)
+		if err := db.MigrateUp(cfg); err != nil {
+			log.Fatalf("migrate: up (%s): %v", db.Describe(cfg), err)
 		}
 	case "down":
-		if err := db.MigrateDown(conn, cfg); err != nil {
-			log.Fatalf("migrate: down: %v", err)
+		if err := db.MigrateDown(cfg); err != nil {
+			log.Fatalf("migrate: down (%s): %v", db.Describe(cfg), err)
 		}
 	default:
 		log.Fatalf("migrate: unknown direction %q, want up or down", *direction)
 	}
 
-	version, dirty, err := db.MigrateVersion(conn, cfg)
+	version, dirty, err := db.MigrateVersion(cfg)
 	if err != nil {
-		log.Fatalf("migrate: version: %v", err)
+		log.Fatalf("migrate: version (%s): %v", db.Describe(cfg), err)
 	}
 	log.Printf("migrate: %s complete, version=%d dirty=%v (%s)", *direction, version, dirty, db.Describe(cfg))
 }
