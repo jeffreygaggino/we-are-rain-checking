@@ -1,7 +1,8 @@
 # 01 — Backend v1
 
 Implements #1 via #2–#11. This file holds the rationale; the source holds the code and only the
-non-obvious comments. Where this plan and `STRUCTURE-go-gin-backend.md` disagree on code, STRUCTURE wins.
+non-obvious comments. `docs/agents/backend.md` is the authority on code; `02-scope-reset.md` supersedes
+this file's framing and ticket line, not its engineering.
 
 ## Status
 
@@ -14,10 +15,13 @@ Stopped deliberately after the first ingest stage. Everything below the line is 
 | #2 service skeleton | **done** — `main.go`, `app/`, `routes/`, `handlers/`, generated `docs/` served at `/docs` |
 | #3 Postgres and migrations | **done** — the health route pings the database, the HTTP seam runs against real Postgres, and `make local` brings the whole stack up |
 | #6 ingest Meetings and Sessions | **done** — `cmd/ingest`, the OpenF1 client, seam 2 against real Postgres with a stubbed upstream |
-| #7–#11 | not started |
+| #7, #8, #9, #12, #13 | not started — see `02-scope-reset.md` |
+| #10 correlation | not started, **rescoped** — Driver-Race unit, three separate axes, no pagination (`02-scope-reset.md`) |
+| #11 forecast cache | **cut** — no measurement motivated it (`02-scope-reset.md`) |
 
-Consequences for what is written below: the cache section and the weather/results half of ingest are
-the intended design and nothing more. Of the endpoint table, only `/health` exists.
+Consequences for what is written below: the weather/results half of ingest and the endpoint table are
+the intended design and nothing more — only `/health` exists. **The cache section below is dead**; it
+is left in place because the reasoning that produced it is what later cut it.
 
 ## Running it
 
@@ -37,17 +41,20 @@ so "the schema changed" is always something with its own exit code.
 
 ## Fill-ins
 
-| STRUCTURE placeholder | value |
+| setting | value |
 |---|---|
 | module path | `github.com/jeffreygaggino/we-are-rain-checking/backend` |
 | DB schema | `f1` |
-| service directory | `backend/` — pairs with a later `frontend/` (#2: "own top-level directory") |
-| image name | `jeffreygaggino/we-are-rain-checking-backend` |
+| service directory | `backend/` — its own top-level directory (#2) |
+| image name | `ghcr.io/jeffreygaggino/we-are-rain-checking-backend` |
 
-## Deviations from STRUCTURE, and why
+## Conventions
 
-STRUCTURE is a greenfield kickoff written for user-authored data behind an auth service. Seven of its
-rules do not survive contact with this domain. Three are already ADRs; the rest are new.
+The service was scaffolded from a generic `STRUCTURE-go-gin-backend.md` written for user-authored data
+behind an auth service. Seven of its rules did not survive contact with this domain, and the file was
+removed on 2026-09-03 once the skeleton stood (`0fff05e`). These are the rules that replaced them —
+stated positively, because a convention defined as a deviation from a deleted file is unreadable.
+Three are ADRs; the rest live here.
 
 1. **No `permissions/` package** (ADR-0001). Handlers begin at step 2 of the seven-step body. The
    seven steps are otherwise intact and in order.
@@ -147,7 +154,7 @@ negligent (ADR-0001). The two decisions stand or fall together.
 
 **Seasons are a range, not a config knob.** `services.FirstSeason = 2023` is the earliest year OpenF1
 carries; the last is the current year from the clock. A knob with one value is the abstraction
-`AGENTS-backend.md` forbids, and the floor is a property of the upstream rather than of a deployment.
+`docs/agents/backend.md` forbids, and the floor is a property of the upstream rather than of a deployment.
 Probed: `meetings?year=2022` 404s, `year=2026` returns rows.
 
 **Resumption at this stage is per season, and derived.** A season strictly before the current year
@@ -198,7 +205,7 @@ Samples. This is the first thing to get wrong in either ticket.
 **No interface at the ingest seam.** The test substitutes the upstream with an `httptest.Server`
 speaking OpenF1's wire shapes, which exercises the client's decoding, its 404 branch and its pacing
 in the same pass. An interface over the client would have moved all three out of the seam and left
-one implementation plus a stub — the guess `AGENTS-backend.md` names.
+one implementation plus a stub — the guess `docs/agents/backend.md` names.
 
 ## Endpoints — three, per the spec
 
@@ -233,7 +240,8 @@ across a corpus that cannot grow, its ordinary output is that no Signal is prese
   dependency — and "Monza" geocodes to a town as readily as a circuit.
 - **Storing a rain magnitude.** `rainfall` is `{0,1}` across all four seasons. Any column implying
   intensity would be a lie at the source.
-- **Serving TLS from the API itself.** STRUCTURE's `main.go` branches on `TLS_CERT`/`TLS_KEY`, but
-  neither #2 nor #3 asks for it — every TLS criterion in #3 is about the *database* connection. A
-  second serving path that nothing configures and no test covers is a branch that rots. `router.Run`
-  only; terminating TLS is the deployment's job until a ticket says otherwise.
+- **Serving TLS from the API itself.** The scaffold branched on `TLS_CERT`/`TLS_KEY`, but neither #2
+  nor #3 asks for it — every TLS criterion in #3 is about the *database* connection. A second serving
+  path that nothing configures and no test covers is a branch that rots. `router.Run` only.
+  Terminating TLS is the deployment's job, and `02-scope-reset.md` settles it: Tailscale Funnel does
+  it, so the branch stays unbuilt rather than merely deferred.

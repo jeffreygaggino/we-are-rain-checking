@@ -1,5 +1,7 @@
 # Natural keys for ingested data
 
+*`STRUCTURE-go-gin-backend.md` was the generic kickoff prompt this service was scaffolded from. It was removed on 2026-09-03 once the skeleton stood; the conventions that replaced it live in `docs/agents/backend.md` and `backend/plans/01-backend-v1.md`. It is named below as the thing this decision argued against.*
+
 `STRUCTURE-go-gin-backend.md` calls for UUID primary keys on every table, a `created_by` column, and soft delete as the default. None of the three fits data this service does not author: OpenF1 already supplies stable identifiers (`meeting_key`, `session_key`), no user creates these rows, and rows are re-ingested rather than deleted.
 
 Ingested tables therefore use the upstream identifiers as primary keys, carry `created_at` and `updated_at`, and carry neither `created_by` nor `deleted_at`.
