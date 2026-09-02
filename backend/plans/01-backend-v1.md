@@ -5,7 +5,7 @@ non-obvious comments. Where this plan and `STRUCTURE-go-gin-backend.md` disagree
 
 ## Status
 
-Stopped deliberately after the HTTP skeleton. Everything below the line is designed, not built.
+Stopped deliberately after the first ingest stage. Everything below the line is designed, not built.
 
 | ticket | state |
 |---|---|
@@ -13,10 +13,11 @@ Stopped deliberately after the HTTP skeleton. Everything below the line is desig
 | #5 seed Circuits and Drivers | **done** — 26 Circuits, 29 Drivers, literal ids, stability test seen to fail |
 | #2 service skeleton | **done** — `main.go`, `app/`, `routes/`, `handlers/`, generated `docs/` served at `/docs` |
 | #3 Postgres and migrations | **done** — the health route pings the database, the HTTP seam runs against real Postgres, and `make local` brings the whole stack up |
-| #6–#11 | not started |
+| #6 ingest Meetings and Sessions | **done** — `cmd/ingest`, the OpenF1 client, seam 2 against real Postgres with a stubbed upstream |
+| #7–#11 | not started |
 
-Consequences for what is written below: the ingest, cache and client sections are the intended design
-and nothing more. Of the endpoint table, only `/health` exists.
+Consequences for what is written below: the cache section and the weather/results half of ingest are
+the intended design and nothing more. Of the endpoint table, only `/health` exists.
 
 ## Running it
 
@@ -26,6 +27,7 @@ One command each, from `backend/`:
 |---|---|
 | `make local` | the whole stack — Postgres, migrations applied, then the API. Returns once `/api/v1/health` answers, so a green run means the service works, not that two containers exist |
 | `make run` | the API alone against whatever `.env` points at |
+| `make ingest` | fills Meetings and Sessions from OpenF1. ~20s cold, ~6s re-run — stored seasons are skipped without a request. Safe to re-run, safe to interrupt |
 | `make test` | starts Postgres, creates the test database, runs every test |
 | `make gate` | format → vet → docs → build → test |
 | `make local-down` | stops the stack |
@@ -140,6 +142,63 @@ negligent (ADR-0001). The two decisions stand or fall together.
 - **Driver resolution** goes `(session, racing number) -> upstream full_name -> seeded driver_id`,
   per Session. An unseeded name aborts the whole ingest before inserting anything. See ADR-0003 —
   this is the decision most likely to be "corrected" by someone who has not read it.
+
+### Stage 1 — Meetings and Sessions (#6)
+
+**Seasons are a range, not a config knob.** `services.FirstSeason = 2023` is the earliest year OpenF1
+carries; the last is the current year from the clock. A knob with one value is the abstraction
+`AGENTS-backend.md` forbids, and the floor is a property of the upstream rather than of a deployment.
+Probed: `meetings?year=2022` 404s, `year=2026` returns rows.
+
+**Resumption at this stage is per season, and derived.** A season strictly before the current year
+whose Meetings *and* Sessions are both already stored is skipped without a request. The current
+season is always re-fetched, because Sessions are still being added to it. Nothing is checkpointed:
+the rows already answer "did this year land".
+
+That rule is only sound because **a season's writes are one transaction**. Both upstream calls happen
+before the transaction opens, so a year is stored whole or not at all — a half-written 2025 would
+otherwise be skipped forever on the next run.
+
+**The 404 discrimination is defensive today.** Probed 2026-09-02: `year=2022` (no results), `year=abc`
+(malformed), `?nonsense=1` (unknown filter) and a nonexistent path all return
+`404 {"detail":"No results found."}` — the upstream currently collapses every one of them into the
+same body. The client still matches on the detail string and errors on anything else, because the
+alternative is treating *every* 404 as an empty season: a proxy's own 404, or an upstream that starts
+distinguishing the cases, would then read as "this season has no races" and ingest would report
+success over an empty table.
+
+**The body check alone is not enough, and review caught that.** A wrong `OPENF1_BASE_URL` answers
+`404 {"detail":"No results found."}` for every path — verified 2026-09-02 against
+`/v1/meetingz?year=2023` — so a misconfigured run reads as "none of these seasons exist", commits
+four empty transactions and exits 0 over an empty table. The exact outcome the body check was
+written to prevent, arriving through the check rather than around it. So a run that fetched at least
+one season and stored no Meeting at all fails with `ErrUpstreamEmpty`. It is scoped to *fetched*
+seasons: a re-run that skips everything already stored has nothing to be empty about.
+
+**An interrupt exits 0.** `context.Canceled` reaches `cmd/ingest` as an error, but a scheduler
+draining the binary with SIGTERM leaves precisely the state this design intends — whole seasons,
+resumable — and a non-zero exit there pages someone about a working system. It logs what it got
+through and returns cleanly. Every other error still exits 1.
+
+**Pacing is a slot reservation, not a sleep.** `client.pacer` hands each call the next free instant
+under a mutex and waits for it, so the interval holds under concurrency and a cancelled context
+returns rather than finishing the sleep. `INGEST_MIN_INTERVAL` is the one knob (2100ms), and tests
+pass `0`.
+
+**`is_cancelled` is stored on Sessions only.** Upstream carries it on both, but a cancelled Meeting is
+not a thing any endpoint asks about, and `f1.meetings` has no column for it — so it is dropped at the
+client boundary rather than given one.
+
+Measured after the first real run: **15 cancelled Sessions**, three of them Races — 2023 Emilia
+Romagna (flooding) and two 2026 rounds. They are stored, because dropping a Session upstream still
+lists would make re-ingest look like it lost rows. **#9 and #10 must filter them**: a cancelled Race
+is not the next Race, and it contributes no result to the corpus while still carrying Weather
+Samples. This is the first thing to get wrong in either ticket.
+
+**No interface at the ingest seam.** The test substitutes the upstream with an `httptest.Server`
+speaking OpenF1's wire shapes, which exercises the client's decoding, its 404 branch and its pacing
+in the same pass. An interface over the client would have moved all three out of the seam and left
+one implementation plus a stub — the guess `AGENTS-backend.md` names.
 
 ## Endpoints — three, per the spec
 

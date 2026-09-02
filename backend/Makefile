@@ -19,7 +19,7 @@ TEST_ENV = DB_HOST=$(TEST_DB_HOST) DB_PORT=$(TEST_DB_PORT) DB_NAME=$(TEST_DB_NAM
 
 # ── Local development ─────────────────────────────────────────────────────────
 
-.PHONY: tidy build docs run test local local-down migrate-up migrate-down
+.PHONY: tidy build docs run test local local-down migrate-up migrate-down ingest
 tidy:  ; @go mod tidy
 docs:  ; @swag init
 build: ; @go build ./...
@@ -32,6 +32,16 @@ local-down: ; @docker compose -f $(COMPOSE_LOCAL) down
 
 migrate-up:   ; @go run ./cmd/migrate -direction up
 migrate-down: ; @go run ./cmd/migrate -direction down
+
+# Fills the tables from OpenF1. Paced to the upstream's 30 req/min, so a first run takes about twenty
+# seconds and a re-run about six — seasons already stored are skipped without a request. Safe to
+# re-run and safe to interrupt.
+#
+# Nothing in the module reads .env — config.LoadConfig reads the environment — so the target sources
+# it. Without this, `make ingest` on a fresh clone dies on `DB_HOST is required` despite .env sitting
+# right there. `make run` has the same gap and is left alone: it is not this ticket's target.
+ingest:
+	@set -a; [ -f .env ] && . ./.env; set +a; go run ./cmd/ingest
 
 # test-db brings up the local Postgres and creates the test database if it is missing. Tests apply
 # the migrations themselves, so this only has to hand them an empty database that exists.

@@ -6,7 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 
+	"github.com/jeffreygaggino/we-are-rain-checking/backend/client"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/handlers"
+	"github.com/jeffreygaggino/we-are-rain-checking/backend/repository"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/routes"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/services"
 )
@@ -22,4 +24,19 @@ func New(conn *sqlx.DB) *gin.Engine {
 	healthHandler := handlers.NewHealthHandler(healthService)
 
 	return routes.SetupRouter(healthHandler)
+}
+
+// NewIngest wires the ingest graph, for the same reason New wires the router: cmd/ingest and the
+// ingest test seam then build the same service, and a repository added here reaches both.
+//
+// The client is an argument rather than built from config, so a test can point ingest at a stub
+// upstream without going through the environment.
+func NewIngest(conn *sqlx.DB, openF1 *client.OpenF1Client) *services.IngestService {
+	// Repositories
+	circuitRepo := repository.NewCircuitRepo()
+	meetingRepo := repository.NewMeetingRepo()
+	sessionRepo := repository.NewSessionRepo()
+
+	// Services
+	return services.NewIngestService(conn, openF1, circuitRepo, meetingRepo, sessionRepo)
 }

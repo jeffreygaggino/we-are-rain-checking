@@ -1,6 +1,20 @@
--- Reverses exactly what the up inserted, and nothing else: the seeded rows only, leaving the tables
--- 000001 created standing. Deleting by the literal ids is what makes that "and nothing else" true —
--- a bare DELETE would also remove rows a later migration or an operator added.
+-- Withdraws the seeded reference data, leaving the tables 000001 created standing.
+--
+-- Two different deletes, for two different reasons.
+--
+-- The seeded rows go by their literal ids, so a row a later migration or an operator added to
+-- f1.circuits or f1.drivers survives — a bare DELETE there would take it too.
+--
+-- The ingested tables are cleared wholesale first, because every one of them references a seeded
+-- Circuit or Driver and Postgres will not let the seed go while they do. That is not a widening of
+-- scope, it is the scope: "roll back the seed" necessarily means "and everything ingested against
+-- it". Those rows are re-ingestable by definition — `make ingest` rebuilds them — where the seeded
+-- ids being withdrawn are the thing that cannot be regenerated (ADR-0003).
+DELETE FROM f1.session_results;
+DELETE FROM f1.weather_samples;
+DELETE FROM f1.sessions;
+DELETE FROM f1.meetings;
+
 DELETE FROM f1.drivers WHERE id IN (
     '35d42e7f-a4f0-46e7-8ddc-dfa63a275129', 'e0d25418-a566-4171-8336-59f649d0c606',
     'b1420115-4b78-4ed2-882d-5c0874b760af', 'ea180ba6-7053-4a79-97ae-8d48fcd67039',
