@@ -1,6 +1,6 @@
 # we-are-rain-checking
 
-Two subjects share this repo. The **F1 weather service** is the substrate; the **skills experiment** is the object of study. The language below covers both, because both are domains here.
+The language of the F1 weather service. Terms defined here are the ones to use in issue titles, test names, commit messages and code — not their listed synonyms.
 
 ## Race weekend
 
@@ -66,24 +66,12 @@ _Avoid_: No data, empty result, null
 A relationship between weather and race outcome that survives its own sample size. Absence of Signal is a finding, not a failure.
 _Avoid_: Correlation (implies a specific statistic), trend, effect
 
-## The experiment
+## Measurement
 
-**Drift**:
-Divergence between a copy of an agent instruction and the source it was copied from, occurring silently and changing agent behaviour.
-_Avoid_: Staleness, version skew
+**Driver-Race**:
+One Driver's participation in one Race — the unit of analysis. A Race contributes one observation about its winner but roughly twenty about Retirements, which is what makes the Retirement question answerable where the winner question is not.
+_Avoid_: Entry, start, result row
 
-**Ablation**:
-Running the same task twice — once with a skill available, once without — to attribute a difference in outcome to that skill.
-_Avoid_: A/B test, comparison
-
-**Ablation Delta**:
-The scored difference between the two Ablation arms. The only evidence that a skill does anything.
-_Avoid_: Improvement, lift, gain
-
-**Treatment Arm** / **Baseline Arm**:
-The run with the skill available, and the run without it.
-_Avoid_: Control (ambiguous about which side has the skill), experimental group
-
-**Fixture Repo**:
-A workspace built for an Ablation, whose contents are controlled per arm so the Baseline Arm cannot read what the skill is supposed to supply.
-_Avoid_: Test repo, sandbox, scratch repo
+**Axis**:
+One weather property a claim is made about, reported on its own — Rainfall, wind band, track temperature band. Axes are never combined into a single measure of bad weather: they act through different mechanisms, and merging them makes an effect unattributable.
+_Avoid_: Factor, variable, inclement weather

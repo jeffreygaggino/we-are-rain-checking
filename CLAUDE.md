@@ -4,6 +4,11 @@
 
 Do not add agent attribution. No `Co-Authored-By: Claude` trailer, no `Claude-Session:` trailer, no "Generated with Claude Code" line in a pull request body. A commit message ends with its own last line, and so does a PR description.
 
+## Backend
+
+The working agreement for the backend service — how we work together, and the authority on code. See
+`docs/agents/backend.md`. Rationale, rejected alternatives and sequencing live in `backend/plans/`.
+
 ## Agent skills
 
 ### Issue tracker
