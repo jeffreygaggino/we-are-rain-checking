@@ -1,5 +1,9 @@
 # we-are-rain-checking
 
+## Commits and pull requests
+
+Do not add agent attribution. No `Co-Authored-By: Claude` trailer, no `Claude-Session:` trailer, no "Generated with Claude Code" line in a pull request body. A commit message ends with its own last line, and so does a PR description.
+
 ## Agent skills
 
 ### Issue tracker
