@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -89,11 +90,16 @@ func NewOpenF1Stub(t *testing.T) *OpenF1Stub {
 func (s *OpenF1Stub) BaseURL() string { return s.server.URL }
 
 // SetSeason gives the stub a year's worth of data. A year never set 404s as "No results found.".
+//
+// The fixtures are copied, not retained: callers amend their own slice between runs to stage an
+// upstream correction, and that write must not reach what the stub is already serving — serve
+// encodes outside the lock, so with a request in flight it is a race. The copy is shallow, which is
+// a complete one only while these two structs stay free of slices, maps and pointers.
 func (s *OpenF1Stub) SetSeason(year int, meetings []StubMeeting, sessions []StubSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.meetings[year] = meetings
-	s.sessions[year] = sessions
+	s.meetings[year] = slices.Clone(meetings)
+	s.sessions[year] = slices.Clone(sessions)
 }
 
 // FailNext arms a one-shot fault on one path for one season. It is keyed on the year because "the
