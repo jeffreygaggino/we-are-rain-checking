@@ -24,10 +24,18 @@ const (
 	silverstone  = "d5ffead2-0555-4abc-b5f0-734ccd124d13"
 )
 
+// What 000002 seeds: every distinct Circuit across 2023-2026, and every Driver appearing in a Race in
+// the corpus. The harness truncates around these rather than reinserting them, so the numbers are
+// asserted both here and against a clean slate.
+const (
+	seededCircuits = 26
+	seededDrivers  = 29
+)
+
 func TestMigrationsApplyAndCreateEverySchemaObject(t *testing.T) {
 	conn, cfg := tests.RequireDB(t)
 
-	version, dirty, err := db.MigrateVersion(conn, cfg)
+	version, dirty, err := db.MigrateVersion(cfg)
 	if err != nil {
 		t.Fatalf("MigrateVersion: %v", err)
 	}
@@ -94,11 +102,11 @@ func TestSeedPopulatesEveryCircuitAndDriverInTheCorpus(t *testing.T) {
 	if err := conn.Get(&drivers, `SELECT COUNT(*) FROM f1.drivers`); err != nil {
 		t.Fatalf("counting drivers: %v", err)
 	}
-	if circuits != 26 {
-		t.Errorf("seeded %d circuits, want 26 — every distinct circuit across 2023-2026", circuits)
+	if circuits != seededCircuits {
+		t.Errorf("seeded %d circuits, want %d — every distinct circuit across 2023-2026", circuits, seededCircuits)
 	}
-	if drivers != 29 {
-		t.Errorf("seeded %d drivers, want 29 — every driver appearing in a Race in the corpus", drivers)
+	if drivers != seededDrivers {
+		t.Errorf("seeded %d drivers, want %d — every driver appearing in a Race in the corpus", drivers, seededDrivers)
 	}
 
 	// Coordinates are seeded, not geocoded, so every row must actually carry a position.
@@ -167,15 +175,15 @@ func TestCollidingRacingNumbersBelongToDistinctSeededDrivers(t *testing.T) {
 // The criterion that makes seeded ids worth having: they survive a rebuild. A migration calling
 // gen_random_uuid() passes every other test in this file and fails this one.
 func TestSeededIdentifiersAreStableAcrossADownUpCycle(t *testing.T) {
-	conn, cfg := tests.RequireDB(t)
+	conn, cfg := tests.RequireOwnSchema(t)
 
 	before := seedFingerprint(t, conn)
 
-	if err := db.MigrateDown(conn, cfg); err != nil {
+	if err := db.MigrateDown(cfg); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
 	assertSeedTablesGone(t, conn)
-	if err := db.MigrateUp(conn, cfg); err != nil {
+	if err := db.MigrateUp(cfg); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 
@@ -251,28 +259,28 @@ func assertSeedTablesGone(t *testing.T, conn *sqlx.DB) {
 	}
 }
 
-// The migration driver takes a connection out of the pool when it is built. If nothing gives that
-// connection back, every up, down and version check costs the caller one of ten for as long as the
-// pool lives — and this suite is one pool per test, each of them driving migrations.
-func TestMigrationOperationsReturnTheirConnectionToTheCallersPool(t *testing.T) {
-	conn, cfg := tests.RequireDB(t)
+// The migration driver takes a connection out of the pool it is built over and holds it for its
+// whole lifetime, so a migrator built over the caller's pool costs the caller one of ten for as long
+// as it lives. A migrator that reached for the caller's pool again would show up here as a
+// connection in use.
+func TestDrivingMigrationsTakesNothingFromTheCallersPool(t *testing.T) {
+	conn, cfg := tests.RequireOwnSchema(t)
 
-	// RequireDB has already driven a down and an up of its own, so a migrator that keeps what it
-	// borrows is visible before this test has done anything. Fatal rather than an error: every
-	// assertion below wants zero too, and letting them run against an already-wrong pool would
-	// report three more failures pointing at RequireDB instead of at the operation under test.
+	// Fatal rather than an error: every assertion below wants zero too, and letting them run against
+	// an already-wrong pool would report three more failures pointing at the harness instead of at
+	// the operation under test.
 	if inUse := conn.Stats().InUse; inUse != 0 {
-		t.Fatalf("%d connections are in use before this test ran, want 0 — RequireDB's own migrations kept them", inUse)
+		t.Fatalf("%d connections are in use before this test ran, want 0", inUse)
 	}
 
-	// Ends on up, so the schema this test leaves behind is the one the next test expects.
+	// Ends on up, so the down in the middle is not what the next assertion runs against.
 	operations := []struct {
 		name string
 		run  func() error
 	}{
-		{"version", func() error { _, _, err := db.MigrateVersion(conn, cfg); return err }},
-		{"down", func() error { return db.MigrateDown(conn, cfg) }},
-		{"up", func() error { return db.MigrateUp(conn, cfg) }},
+		{"version", func() error { _, _, err := db.MigrateVersion(cfg); return err }},
+		{"down", func() error { return db.MigrateDown(cfg) }},
+		{"up", func() error { return db.MigrateUp(cfg) }},
 	}
 
 	for _, operation := range operations {
@@ -281,12 +289,12 @@ func TestMigrationOperationsReturnTheirConnectionToTheCallersPool(t *testing.T) 
 		}
 
 		if got := conn.Stats().InUse; got != 0 {
-			t.Errorf("after migrate %s the pool has %d connections in use, want 0 — the migrator kept one",
+			t.Errorf("after migrate %s the pool has %d connections in use, want 0 — the migrator took one",
 				operation.name, got)
 		}
 
-		// Usable, not merely accounted for: the obvious way to release the connection is to close
-		// the migrator, which closes the caller's whole pool along with it.
+		// Usable, not merely accounted for: the way a migrator releases what it holds is to close
+		// the pool it was built over, and the caller's must not be the pool it closes.
 		var alive int
 		if err := conn.Get(&alive, `SELECT 1`); err != nil {
 			t.Fatalf("the pool is unusable after migrate %s: %v", operation.name, err)
@@ -294,39 +302,54 @@ func TestMigrationOperationsReturnTheirConnectionToTheCallersPool(t *testing.T) 
 	}
 }
 
-// A leaked connection is not bounded by the pool's cap of ten, it is subtracted from it. So a leak
-// does not fail this test, it deadlocks it: the eleventh migrator waits for a connection that
-// nobody will ever return. The deadline is what turns that into a failure a person can read.
-func TestDrivingMigrationsRepeatedlyDoesNotExhaustThePool(t *testing.T) {
+// The migrator owns its pool now, so it is the only thing that can close it. A migrator that does
+// not leaves a Postgres backend behind per operation — invisible to any pool statistic the caller
+// can read, and bounded by nothing but the server's connection limit. So the count is read from the
+// server: it is the only place the leak is observable.
+func TestDrivingMigrationsRepeatedlyLeavesNoBackendsBehind(t *testing.T) {
 	conn, cfg := tests.RequireDB(t)
 
-	const checks = 25 // comfortably past the pool's cap of ten
+	const checks = 25 // comfortably past a pool's cap of ten, and a quarter of the server's hundred
 
-	done := make(chan error, 1)
-	go func() {
-		for range checks {
-			if _, _, err := db.MigrateVersion(conn, cfg); err != nil {
-				done <- err
-				return
-			}
-		}
-		done <- nil
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
+	before := backendCount(t, conn)
+	for range checks {
+		if _, _, err := db.MigrateVersion(cfg); err != nil {
 			t.Fatalf("MigrateVersion: %v", err)
 		}
-	case <-time.After(30 * time.Second):
-		stats := conn.Stats()
-		t.Fatalf("%d version checks did not finish within 30s — %d connections open, %d in use, %d waiters: the migrator is not giving them back",
-			checks, stats.OpenConnections, stats.InUse, stats.WaitCount)
 	}
 
-	if got := conn.Stats().InUse; got != 0 {
-		t.Errorf("%d connections still in use after %d version checks, want 0", got, checks)
+	// Closing a pool asks the server to end its backend, which it does a moment later rather than
+	// synchronously. Only a count that stays high is a leak; one that settles is the close landing.
+	//
+	// The tolerance is for the count being the server's rather than this suite's: a psql session
+	// someone left open would otherwise fail the test. A leak here is one backend per operation, so
+	// twenty-five of them clear any tolerance this side of the connection limit.
+	const tolerance = 5
+	var after int
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		after = backendCount(t, conn)
+		if after <= before+tolerance || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
+
+	if after > before+tolerance {
+		t.Errorf("%d backends were open before %d version checks and %d after, want no more than %d — each migrator kept its pool",
+			before, checks, after, before+tolerance)
+	}
+}
+
+// backendCount is how many connections the server holds to this database, whoever opened them.
+func backendCount(t *testing.T, conn *sqlx.DB) int {
+	t.Helper()
+
+	var n int
+	const q = `SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database()`
+	if err := conn.Get(&n, q); err != nil {
+		t.Fatalf("counting backends: %v", err)
+	}
+	return n
 }
 
 // The DSN carries the password; the loggable description must not. Every log line in db/ uses

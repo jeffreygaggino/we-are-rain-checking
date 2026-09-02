@@ -2,6 +2,7 @@ package tests
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -23,7 +24,8 @@ type Harness struct {
 	DB     *sqlx.DB
 }
 
-// RequireHarness stands the whole stack up against the migrated test database.
+// RequireHarness stands the whole stack up against the package's database, wound back to a clean
+// slate.
 func RequireHarness(t *testing.T) *Harness {
 	t.Helper()
 
@@ -31,12 +33,24 @@ func RequireHarness(t *testing.T) *Harness {
 	return &Harness{Router: NewRouter(conn), DB: conn}
 }
 
+// RouterOnly is the same router with no database behind it, for the tests whose subject is routing
+// itself: the envelope on an unknown path, the generated spec, and the absence of an auth layer in
+// front of the routes. None of them opens a connection, so none of them waits for a schema.
+func RouterOnly(t *testing.T) *Harness {
+	t.Helper()
+
+	return &Harness{Router: NewRouter(nil), DB: nil}
+}
+
 // NewRouter builds the router over an arbitrary pool, so a test can point the service at a database
 // that is not there and assert what it does about it.
 func NewRouter(conn *sqlx.DB) *gin.Engine {
-	// Quiets gin's per-request logging, which otherwise interleaves with test output. It does not
-	// change routing or handler behaviour, so the seam under test is still the served one.
+	// Quiets gin, in the two places it is noisy. TestMode drops the debug route table; the discarded
+	// writer drops the per-request log lines, which come from gin.Default's logger and are not
+	// affected by the mode at all. The logger captures the writer when the router is built, so both
+	// lines must precede app.New. Errors keep their own writer, so a panic still reaches the run.
 	gin.SetMode(gin.TestMode)
+	gin.DefaultWriter = io.Discard
 	return app.New(conn)
 }
 

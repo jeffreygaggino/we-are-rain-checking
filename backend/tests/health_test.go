@@ -45,7 +45,7 @@ func TestHealthFailsWhenTheDatabaseIsUnreachable(t *testing.T) {
 // #2: no route returns a bare object. Gin's own 404 is plain text, so this fails unless the router
 // hands unmatched paths to the shared envelope.
 func TestAnUnknownRouteAnswersThroughTheErrorEnvelope(t *testing.T) {
-	h := tests.RequireHarness(t)
+	h := tests.RouterOnly(t)
 
 	rec := h.GET(t, "/api/v1/no-such-route")
 
@@ -55,7 +55,7 @@ func TestAnUnknownRouteAnswersThroughTheErrorEnvelope(t *testing.T) {
 // The generated spec is served by the same router as the routes it documents, so a route added
 // without regenerating docs is visible here rather than at whatever a reader assumes.
 func TestGeneratedDocsAreServedAndDescribeTheHealthRoute(t *testing.T) {
-	h := tests.RequireHarness(t)
+	h := tests.RouterOnly(t)
 
 	rec := h.GET(t, "/docs/doc.json")
 
@@ -70,13 +70,18 @@ func TestGeneratedDocsAreServedAndDescribeTheHealthRoute(t *testing.T) {
 // ADR-0001 and #2, asserted rather than assumed: there is no auth layer to send credentials to and
 // no browser client to allow, so the health route answers an unauthenticated request and no response
 // carries a CORS header. Adding either becomes a decision someone has to make against this test.
+//
+// No database behind the router, on purpose. The subject is what stands in front of the handler, and
+// the handler's own 503 about the pool it does not have is proof the request reached it — which is
+// what an auth layer would have prevented.
 func TestNoAuthOrCORSLayerStandsInFrontOfTheRoutes(t *testing.T) {
-	h := tests.RequireHarness(t)
+	h := tests.RouterOnly(t)
 
 	rec := h.GET(t, "/api/v1/health")
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("an unauthenticated request got %d, want 200", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("an unauthenticated request got %d, want the health handler's own %d",
+			rec.Code, http.StatusServiceUnavailable)
 	}
 	for _, header := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials", "WWW-Authenticate"} {
 		if got := rec.Header().Get(header); got != "" {
@@ -86,11 +91,12 @@ func TestNoAuthOrCORSLayerStandsInFrontOfTheRoutes(t *testing.T) {
 }
 
 // unreachablePool returns a pool that parses but cannot connect: sqlx.Open is lazy, so the failure
-// lands where the health route pings rather than here.
+// lands where the health route pings rather than here. It borrows the test configuration and not the
+// database — a pool that is never reached needs no schema behind it.
 func unreachablePool(t *testing.T) *sqlx.DB {
 	t.Helper()
 
-	_, cfg := tests.RequireDB(t)
+	cfg := tests.RequireConfig(t)
 
 	gone := *cfg
 	// Port 1 is closed, so the dial is refused immediately rather than after a connect timeout.
