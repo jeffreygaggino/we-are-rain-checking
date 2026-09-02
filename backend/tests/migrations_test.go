@@ -3,6 +3,7 @@ package tests_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -247,6 +248,84 @@ func assertSeedTablesGone(t *testing.T, conn *sqlx.DB) {
 	}
 	if exists {
 		t.Error("f1.drivers still exists after migrate down")
+	}
+}
+
+// The migration driver takes a connection out of the pool when it is built. If nothing gives that
+// connection back, every up, down and version check costs the caller one of ten for as long as the
+// pool lives — and this suite is one pool per test, each of them driving migrations.
+func TestMigrationOperationsReturnTheirConnectionToTheCallersPool(t *testing.T) {
+	conn, cfg := tests.RequireDB(t)
+
+	// RequireDB has already driven a down and an up of its own, so a migrator that keeps what it
+	// borrows is visible before this test has done anything. Fatal rather than an error: every
+	// assertion below wants zero too, and letting them run against an already-wrong pool would
+	// report three more failures pointing at RequireDB instead of at the operation under test.
+	if inUse := conn.Stats().InUse; inUse != 0 {
+		t.Fatalf("%d connections are in use before this test ran, want 0 — RequireDB's own migrations kept them", inUse)
+	}
+
+	// Ends on up, so the schema this test leaves behind is the one the next test expects.
+	operations := []struct {
+		name string
+		run  func() error
+	}{
+		{"version", func() error { _, _, err := db.MigrateVersion(conn, cfg); return err }},
+		{"down", func() error { return db.MigrateDown(conn, cfg) }},
+		{"up", func() error { return db.MigrateUp(conn, cfg) }},
+	}
+
+	for _, operation := range operations {
+		if err := operation.run(); err != nil {
+			t.Fatalf("migrate %s: %v", operation.name, err)
+		}
+
+		if got := conn.Stats().InUse; got != 0 {
+			t.Errorf("after migrate %s the pool has %d connections in use, want 0 — the migrator kept one",
+				operation.name, got)
+		}
+
+		// Usable, not merely accounted for: the obvious way to release the connection is to close
+		// the migrator, which closes the caller's whole pool along with it.
+		var alive int
+		if err := conn.Get(&alive, `SELECT 1`); err != nil {
+			t.Fatalf("the pool is unusable after migrate %s: %v", operation.name, err)
+		}
+	}
+}
+
+// A leaked connection is not bounded by the pool's cap of ten, it is subtracted from it. So a leak
+// does not fail this test, it deadlocks it: the eleventh migrator waits for a connection that
+// nobody will ever return. The deadline is what turns that into a failure a person can read.
+func TestDrivingMigrationsRepeatedlyDoesNotExhaustThePool(t *testing.T) {
+	conn, cfg := tests.RequireDB(t)
+
+	const checks = 25 // comfortably past the pool's cap of ten
+
+	done := make(chan error, 1)
+	go func() {
+		for range checks {
+			if _, _, err := db.MigrateVersion(conn, cfg); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("MigrateVersion: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		stats := conn.Stats()
+		t.Fatalf("%d version checks did not finish within 30s — %d connections open, %d in use, %d waiters: the migrator is not giving them back",
+			checks, stats.OpenConnections, stats.InUse, stats.WaitCount)
+	}
+
+	if got := conn.Stats().InUse; got != 0 {
+		t.Errorf("%d connections still in use after %d version checks, want 0", got, checks)
 	}
 }
 
