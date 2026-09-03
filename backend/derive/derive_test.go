@@ -64,8 +64,8 @@ func TestIsWetSession(t *testing.T) {
 	}
 }
 
-// The honesty constraint as a value. Nine wet Races is the measured ceiling of this corpus and it
-// cannot grow, so the rainfall axis is expected to sit permanently below MinimumSampleSize.
+// The honesty constraint as a value. Nine wet Races is the measured ceiling across all four seasons
+// and it cannot grow, so the rainfall axis is expected to sit permanently below MinimumSampleSize.
 func TestSampleVerdict(t *testing.T) {
 	tests := []struct {
 		name string
@@ -73,7 +73,7 @@ func TestSampleVerdict(t *testing.T) {
 		want derive.Verdict
 	}{
 		{"nothing at all", 0, derive.VerdictInsufficientSample},
-		{"the nine wet Races this corpus contains", 9, derive.VerdictInsufficientSample},
+		{"the nine wet Races these seasons contain", 9, derive.VerdictInsufficientSample},
 		{"one short of the minimum", derive.MinimumSampleSize - 1, derive.VerdictInsufficientSample},
 		{"exactly the minimum is sufficient", derive.MinimumSampleSize, derive.VerdictSufficient},
 		{"comfortably above", derive.MinimumSampleSize + 50, derive.VerdictSufficient},

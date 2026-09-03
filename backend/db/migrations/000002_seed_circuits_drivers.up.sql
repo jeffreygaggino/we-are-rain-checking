@@ -50,7 +50,7 @@ INSERT INTO f1.circuits (id, circuit_key, short_name, location, country_name, la
 --
 -- Why identity has to originate here, visible in this list: upstream's driver_number is a
 -- per-season assignment, and number 1 belongs to the reigning champion rather than to a person.
--- Across this corpus 1 covers both VERSTAPPEN and NORRIS, and 3 covers both VERSTAPPEN and
+-- Across these four seasons 1 covers both VERSTAPPEN and NORRIS, and 3 covers both VERSTAPPEN and
 -- RICCIARDO. Keying results on the number merges two people, quietly. See ADR-0003.
 INSERT INTO f1.drivers (id, full_name, short_name) VALUES
     ('35d42e7f-a4f0-46e7-8ddc-dfa63a275129', 'Alexander ALBON'   , 'ALB'),

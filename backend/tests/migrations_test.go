@@ -79,8 +79,8 @@ func TestIngestedTablesHaveNoSoftDeleteOrCreatorColumns(t *testing.T) {
 // is a seed gap that no later code path would report — ingest resolves a Circuit by key and never
 // reads its position.
 //
-// The seeded row counts are deliberately not asserted. Their numbers change whenever the corpus
-// grows a season, and a test that has to be edited alongside the seed catches only the edit.
+// The seeded row counts are deliberately not asserted. Their numbers change whenever a season is
+// added, and a test that has to be edited alongside the seed catches only the edit.
 func TestEverySeededCircuitCarriesItsCoordinates(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 

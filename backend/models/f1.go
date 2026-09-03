@@ -45,7 +45,7 @@ type Meeting struct {
 }
 
 // SessionNameRace is the one Session name that awards championship points to a full grid. Sprint is
-// deliberately excluded: the corpus and every claim in this service are per Race.
+// deliberately excluded: every claim this service makes is per Race.
 const SessionNameRace = "Race"
 
 type Session struct {
