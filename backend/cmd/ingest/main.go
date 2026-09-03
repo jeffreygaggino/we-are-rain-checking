@@ -1,11 +1,12 @@
-// Command ingest fills the Meetings and Sessions tables from OpenF1.
+// Command ingest fills the Meetings, Sessions and Weather Samples tables from OpenF1.
 //
 // It is a scheduled binary and never an HTTP route. That is what makes the absent auth layer safe
 // rather than negligent: the one operation worth protecting is not on the API at all. The two
 // decisions stand or fall together (ADR-0001).
 //
-// Re-running is safe and cheap — seasons already stored are skipped without an upstream call — so
-// the recovery from any failure below is to run it again.
+// Re-running is safe and cheap — a season already stored, and a Session that already has Weather
+// Samples, are both skipped without an upstream call — so the recovery from any failure below is to
+// run it again.
 package main
 
 import (
@@ -54,16 +55,20 @@ func run() error {
 	// SIGTERM leaves exactly the state the design intends — whole seasons, resumable — and a
 	// non-zero exit there would page someone about a working system.
 	if errors.Is(err, context.Canceled) {
-		log.Printf("ingest: interrupted after %v, skipped %v — re-run to resume",
-			summary.SeasonsIngested, summary.SeasonsSkipped)
+		log.Printf("ingest: interrupted after seasons %v (skipped %v) and %d weather samples from "+
+			"%d sessions — re-run to resume",
+			summary.SeasonsIngested, summary.SeasonsSkipped, summary.WeatherSamples, summary.WeatherSessions)
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%w (ingested %v, skipped %v before failing)",
-			err, summary.SeasonsIngested, summary.SeasonsSkipped)
+		return fmt.Errorf("%w (ingested seasons %v, skipped %v, and %d weather samples from %d sessions "+
+			"before failing)",
+			err, summary.SeasonsIngested, summary.SeasonsSkipped, summary.WeatherSamples, summary.WeatherSessions)
 	}
 
-	log.Printf("ingest: complete — %d meetings and %d sessions across %v, skipped %v",
-		summary.Meetings, summary.Sessions, summary.SeasonsIngested, summary.SeasonsSkipped)
+	log.Printf("ingest: complete — %d meetings and %d sessions across %v, skipped %v; "+
+		"%d weather samples from %d sessions, skipped %d",
+		summary.Meetings, summary.Sessions, summary.SeasonsIngested, summary.SeasonsSkipped,
+		summary.WeatherSamples, summary.WeatherSessions, summary.WeatherSessionsSkipped)
 	return nil
 }

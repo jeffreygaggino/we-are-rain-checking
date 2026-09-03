@@ -81,9 +81,27 @@ type Session struct {
 	IsCancelled bool
 }
 
-// meetingRow and sessionRow are the wire. Timestamps arrive as strings rather than time.Time so a
-// missing or malformed one is an error naming the field, instead of a zero time flowing into a
-// NOT NULL column.
+// WeatherSample is one timestamped observation at the Circuit during a Session.
+//
+// Rainfall becomes a bool here, at the boundary, so nothing downstream can read a magnitude into a
+// flag that has none (CONTEXT.md, Rainfall). Everything else is a pointer: an observation the
+// upstream did not take is absent rather than zero, and wind speed in particular records a real
+// 0 m/s.
+type WeatherSample struct {
+	SessionKey       int
+	ObservedAt       time.Time
+	Rainfall         bool
+	AirTemperature   *float64
+	TrackTemperature *float64
+	Humidity         *float64
+	Pressure         *float64
+	WindSpeed        *float64
+	WindDirection    *int
+}
+
+// meetingRow, sessionRow and weatherRow are the wire. Timestamps arrive as strings rather than
+// time.Time so a missing or malformed one is an error naming the field, instead of a zero time
+// flowing into a NOT NULL column.
 type meetingRow struct {
 	MeetingKey   int     `json:"meeting_key"`
 	Year         int     `json:"year"`
@@ -107,11 +125,25 @@ type sessionRow struct {
 	IsCancelled bool    `json:"is_cancelled"`
 }
 
+// Rainfall is a *int for the same reason the timestamps are *string: decoding an absent one into 0
+// would store "it was dry" over an observation the upstream never took.
+type weatherRow struct {
+	SessionKey       int      `json:"session_key"`
+	Date             *string  `json:"date"`
+	Rainfall         *int     `json:"rainfall"`
+	AirTemperature   *float64 `json:"air_temperature"`
+	TrackTemperature *float64 `json:"track_temperature"`
+	Humidity         *float64 `json:"humidity"`
+	Pressure         *float64 `json:"pressure"`
+	WindSpeed        *float64 `json:"wind_speed"`
+	WindDirection    *int     `json:"wind_direction"`
+}
+
 // Meetings returns every Meeting of a season. A season the upstream does not carry is an empty
 // slice and no error — that is an answer, not a fault.
 func (c *OpenF1Client) Meetings(ctx context.Context, year int) ([]Meeting, error) {
 	var rows []meetingRow
-	if err := c.get(ctx, "/meetings", year, &rows); err != nil {
+	if err := c.get(ctx, "/meetings", seasonQuery(year), &rows); err != nil {
 		return nil, fmt.Errorf("openf1.Meetings(%d): %w", year, err)
 	}
 
@@ -138,7 +170,7 @@ func (c *OpenF1Client) Meetings(ctx context.Context, year int) ([]Meeting, error
 // Sessions returns every Session of a season, as above.
 func (c *OpenF1Client) Sessions(ctx context.Context, year int) ([]Session, error) {
 	var rows []sessionRow
-	if err := c.get(ctx, "/sessions", year, &rows); err != nil {
+	if err := c.get(ctx, "/sessions", seasonQuery(year), &rows); err != nil {
 		return nil, fmt.Errorf("openf1.Sessions(%d): %w", year, err)
 	}
 
@@ -167,16 +199,69 @@ func (c *OpenF1Client) Sessions(ctx context.Context, year int) ([]Session, error
 	return sessions, nil
 }
 
+// WeatherSamples returns one Session's Weather Samples. A Session the upstream holds no weather for
+// — a cancelled one, among others — is an empty slice and no error, the same answer shape a season
+// it does not carry gets.
+func (c *OpenF1Client) WeatherSamples(ctx context.Context, sessionKey int) ([]WeatherSample, error) {
+	var rows []weatherRow
+	if err := c.get(ctx, "/weather", sessionQuery(sessionKey), &rows); err != nil {
+		return nil, fmt.Errorf("openf1.WeatherSamples(%d): %w", sessionKey, err)
+	}
+
+	samples := make([]WeatherSample, 0, len(rows))
+	for _, row := range rows {
+		observedAt, err := parseUpstreamTime(row.Date)
+		if err != nil {
+			return nil, fmt.Errorf("openf1.WeatherSamples(%d): date: %w", sessionKey, err)
+		}
+		if row.Rainfall == nil {
+			return nil, fmt.Errorf("openf1.WeatherSamples(%d): sample at %s: upstream sent no rainfall",
+				sessionKey, observedAt)
+		}
+		// The filter is the upstream's to honour, so it is checked rather than assumed. A row for
+		// another Session stored under this one would leave the Session asked for still empty — and
+		// so re-asked on every run, the resumption rule defeated silently.
+		if row.SessionKey != sessionKey {
+			return nil, &models.UpstreamError{
+				Upstream: UpstreamOpenF1,
+				Message: fmt.Sprintf("weather for session %d answered with a sample for session %d",
+					sessionKey, row.SessionKey),
+			}
+		}
+		samples = append(samples, WeatherSample{
+			SessionKey:       row.SessionKey,
+			ObservedAt:       observedAt,
+			Rainfall:         *row.Rainfall != 0,
+			AirTemperature:   row.AirTemperature,
+			TrackTemperature: row.TrackTemperature,
+			Humidity:         row.Humidity,
+			Pressure:         row.Pressure,
+			WindSpeed:        row.WindSpeed,
+			WindDirection:    row.WindDirection,
+		})
+	}
+	return samples, nil
+}
+
+func seasonQuery(year int) url.Values { return url.Values{"year": {strconv.Itoa(year)}} }
+
+func sessionQuery(sessionKey int) url.Values {
+	return url.Values{"session_key": {strconv.Itoa(sessionKey)}}
+}
+
 // get performs one paced, bounded request and decodes the array body into out.
 //
 // The empty-result 404 leaves out untouched — the caller's zero-length slice is the answer — while
 // every other non-2xx becomes an UpstreamError carrying the upstream's own status and message.
-func (c *OpenF1Client) get(ctx context.Context, path string, year int, out any) error {
+//
+// query rather than a year: a season is selected by `year` and a Session's weather by `session_key`,
+// and the pacing, the bound and the 404 discrimination are the same for both.
+func (c *OpenF1Client) get(ctx context.Context, path string, query url.Values, out any) error {
 	if err := c.pacer.wait(ctx); err != nil {
 		return err
 	}
 
-	target := c.baseURL + path + "?" + url.Values{"year": {strconv.Itoa(year)}}.Encode()
+	target := c.baseURL + path + "?" + query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return fmt.Errorf("building request: %w", err)

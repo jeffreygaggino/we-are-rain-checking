@@ -6,7 +6,7 @@ this file's framing and ticket line, not its engineering.
 
 ## Status
 
-Stopped deliberately after the first ingest stage. Everything below the line is designed, not built.
+Ingest fills Meetings, Sessions and Weather Samples. Everything below the line is designed, not built.
 
 | ticket | state |
 |---|---|
@@ -15,12 +15,14 @@ Stopped deliberately after the first ingest stage. Everything below the line is 
 | #2 service skeleton | **done** — `main.go`, `app/`, `routes/`, `handlers/`, generated `docs/` served at `/docs` |
 | #3 Postgres and migrations | **done** — the health route pings the database, the HTTP seam runs against real Postgres, and `make local` brings the whole stack up |
 | #6 ingest Meetings and Sessions | **done** — `cmd/ingest`, the OpenF1 client, seam 2 against real Postgres with a stubbed upstream |
-| #7, #8, #9, #12, #13 | not started — see `02-scope-reset.md` |
+| #13 empty-upstream guard | **done** — the guard asks about completed seasons only |
+| #7 ingest Weather Samples | **done** — per-Session resumption on the same seam 2 harness |
+| #8, #9, #12 | not started — see `02-scope-reset.md` |
 | #10 correlation | not started, **rescoped** — Driver-Race unit, three separate axes, no pagination (`02-scope-reset.md`) |
 | #11 forecast cache | **cut** — no measurement motivated it (`02-scope-reset.md`) |
 
-Consequences for what is written below: the weather/results half of ingest and the endpoint table are
-the intended design and nothing more — only `/health` exists. **The cache section below is dead**; it
+Consequences for what is written below: Session Results and the endpoint table are the intended
+design and nothing more — only `/health` exists. **The cache section below is dead**; it
 is left in place because the reasoning that produced it is what later cut it.
 
 ## Running it
@@ -220,6 +222,55 @@ Samples. This is the first thing to get wrong in either ticket.
 speaking OpenF1's wire shapes, which exercises the client's decoding, its 404 branch and its pacing
 in the same pass. An interface over the client would have moved all three out of the seam and left
 one implementation plus a stub — the guess `docs/agents/backend.md` names.
+
+### Stage 2 — Weather Samples (#7)
+
+**Resumption at this stage is per Session, and derived.** A completed Session's weather never changes
+— the upstream is live only ±30 min around a Session — so a Session that already has samples is
+skipped without a request, and only Sessions whose `date_end` is past are considered at all. Nothing
+is checkpointed: the rows answer "did this Session land", exactly as they do for a season at stage 1.
+
+That rule is only sound because **a Session's samples are one transaction**, opened after the
+upstream call has returned. Same property as a season, one level down: a Session is stored whole or
+not at all, so a half-written one cannot be skipped forever on the next run.
+
+**Cancelled Sessions are ingested, not filtered.** Probed 2026-09-03: `weather?session_key=9086` —
+the cancelled 2023 Emilia Romagna Race — answers `404 {"detail":"No results found."}`, so a
+cancelled Session's samples are simply absent rather than the row needing special handling. Filtering
+here would be #9's and #10's decision taken in the wrong place; the flag is on the Session and those
+tickets read it.
+
+**A Session the upstream has no samples for is re-asked on every run.** It never gets rows, so the
+derived skip cannot see it — the one place this stage's resumption is weaker than stage 1's. Measured
+cost: 15 cancelled Sessions across the corpus, about 31 s of paced requests on a re-run that
+otherwise makes none. A `weather_ingested_at` column would close it and would be a second source of
+truth for a fact the rows carry everywhere else, so it is parked until a re-run's cost is an actual
+complaint.
+
+**Per Session, not per Meeting.** `weather` accepts `meeting_key` too, which would collapse 495
+requests into 85 — about 17 minutes down to 3 at the 2.1 s interval. Rejected for now: the resumption
+unit is the Session, so a Meeting-level fetch would have to split its rows by `session_key` and
+decide what a partly-stored Meeting means, which is a second rule for the same property. The first
+run is a one-off and its length is the upstream's rate limit, not a defect. Revisit if a full
+re-ingest ever sits on a critical path.
+
+**Rainfall is a binary presence flag, and the reader keeps it one.** Upstream sends `0` or `1` as a
+JSON number — probed across the corpus, no other value appears — and the client maps it to `bool` at
+the boundary so nothing downstream can read a magnitude into it. It is also the one field a missing
+value fails on rather than passing through: every claim this service makes rests on it, and a guessed
+`false` moves Wet Fraction with nothing to show for it. Temperature, humidity, pressure and wind stay
+nullable end to end, because a gap in those is a gap and not a bug.
+
+**Wind speed stays continuous.** Stored as sent, in m/s, `double precision`. Banding happens in
+`derive/` where the edges are defined once — see the thresholds table.
+
+**The index is the primary key.** `(session_key, observed_at)` serves both reads this table has: the
+samples for a Session, and a time range within one. A second index would be written on every ingest
+row and read by nothing. See the schema table above.
+
+**Samples are written one row at a time,** not as a multi-row `INSERT`. Postgres refuses to let one
+statement's `ON CONFLICT DO UPDATE` touch the same row twice, so a batch would turn a repeated `date`
+in the upstream's own response into a failed ingest rather than an idempotent write.
 
 ## Endpoints — three, per the spec
 

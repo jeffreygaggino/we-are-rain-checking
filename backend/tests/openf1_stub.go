@@ -23,6 +23,7 @@ type OpenF1Stub struct {
 	mu       sync.Mutex
 	meetings map[int][]StubMeeting
 	sessions map[int][]StubSession
+	weather  map[int][]StubWeatherSample
 	faults   map[string]stubFault
 	delay    time.Duration
 	requests []StubRequest
@@ -59,11 +60,33 @@ type StubSession struct {
 	IsCancelled      bool   `json:"is_cancelled"`
 }
 
+// StubWeatherSample is one row of `GET /weather`, in the upstream's field names.
+//
+// Rainfall is an int because that is what the wire carries. Staging it as a bool would move the
+// mapping into the fixture and stop the test proving the client does it.
+type StubWeatherSample struct {
+	Date             string  `json:"date"`
+	SessionKey       int     `json:"session_key"`
+	MeetingKey       int     `json:"meeting_key"`
+	WindDirection    int     `json:"wind_direction"`
+	AirTemperature   float64 `json:"air_temperature"`
+	Humidity         float64 `json:"humidity"`
+	Pressure         float64 `json:"pressure"`
+	Rainfall         int     `json:"rainfall"`
+	WindSpeed        float64 `json:"wind_speed"`
+	TrackTemperature float64 `json:"track_temperature"`
+}
+
 // StubRequest is one call the stub served. At is what the pacing assertion measures.
+//
+// Year and SessionKey are both here because the two shapes of request this stub serves select
+// differently — a season by `year`, a Session's weather by `session_key` — and whichever the path
+// does not use stays zero.
 type StubRequest struct {
-	Path string
-	Year int
-	At   time.Time
+	Path       string
+	Year       int
+	SessionKey int
+	At         time.Time
 }
 
 type stubFault struct {
@@ -79,6 +102,7 @@ func NewOpenF1Stub(t *testing.T) *OpenF1Stub {
 	s := &OpenF1Stub{
 		meetings: map[int][]StubMeeting{},
 		sessions: map[int][]StubSession{},
+		weather:  map[int][]StubWeatherSample{},
 		faults:   map[string]stubFault{},
 	}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -94,12 +118,21 @@ func (s *OpenF1Stub) BaseURL() string { return s.server.URL }
 // The fixtures are copied, not retained: callers amend their own slice between runs to stage an
 // upstream correction, and that write must not reach what the stub is already serving — serve
 // encodes outside the lock, so with a request in flight it is a race. The copy is shallow, which is
-// a complete one only while these two structs stay free of slices, maps and pointers.
+// a complete one only while the fixture structs stay free of slices, maps and pointers.
 func (s *OpenF1Stub) SetSeason(year int, meetings []StubMeeting, sessions []StubSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.meetings[year] = slices.Clone(meetings)
 	s.sessions[year] = slices.Clone(sessions)
+}
+
+// SetWeather gives the stub one Session's Weather Samples. A Session never set 404s as "No results
+// found." — which is what the live API does for a Session it holds no weather for, a cancelled one
+// included. Copied for the same reason SetSeason copies.
+func (s *OpenF1Stub) SetWeather(sessionKey int, samples []StubWeatherSample) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.weather[sessionKey] = slices.Clone(samples)
 }
 
 // FailNext arms a one-shot fault on one path for one season. It is keyed on the year because "the
@@ -108,10 +141,20 @@ func (s *OpenF1Stub) SetSeason(year int, meetings []StubMeeting, sessions []Stub
 func (s *OpenF1Stub) FailNext(path string, year, status int, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.faults[faultKey(path, year)] = stubFault{status: status, body: body}
+	s.faults[faultKey(path, year, 0)] = stubFault{status: status, body: body}
 }
 
-func faultKey(path string, year int) string { return fmt.Sprintf("%s?year=%d", path, year) }
+// FailNextForSession is FailNext for a path selected by Session rather than by season, which is what
+// makes "the run died on this Session's weather" stageable.
+func (s *OpenF1Stub) FailNextForSession(path string, sessionKey, status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.faults[faultKey(path, 0, sessionKey)] = stubFault{status: status, body: body}
+}
+
+func faultKey(path string, year, sessionKey int) string {
+	return fmt.Sprintf("%s?year=%d&session_key=%d", path, year, sessionKey)
+}
 
 // Delay holds every response back, for asserting the client's own timeout rather than the upstream's.
 func (s *OpenF1Stub) Delay(d time.Duration) {
@@ -136,20 +179,26 @@ func (s *OpenF1Stub) ResetRequests() {
 }
 
 func (s *OpenF1Stub) serve(w http.ResponseWriter, r *http.Request) {
-	year := 0
-	if _, err := fmt.Sscanf(r.URL.Query().Get("year"), "%d", &year); err != nil {
-		year = 0
-	}
+	query := r.URL.Query()
+	year := intParam(query.Get("year"))
+	sessionKey := intParam(query.Get("session_key"))
 
 	s.mu.Lock()
-	s.requests = append(s.requests, StubRequest{Path: r.URL.Path, Year: year, At: time.Now()})
-	fault, faulted := s.faults[faultKey(r.URL.Path, year)]
+	s.requests = append(s.requests, StubRequest{
+		Path:       r.URL.Path,
+		Year:       year,
+		SessionKey: sessionKey,
+		At:         time.Now(),
+	})
+	key := faultKey(r.URL.Path, year, sessionKey)
+	fault, faulted := s.faults[key]
 	if faulted {
-		delete(s.faults, faultKey(r.URL.Path, year))
+		delete(s.faults, key)
 	}
 	delay := s.delay
 	meetings, haveMeetings := s.meetings[year]
 	sessions, haveSessions := s.sessions[year]
+	weather, haveWeather := s.weather[sessionKey]
 	s.mu.Unlock()
 
 	if delay > 0 {
@@ -173,6 +222,8 @@ func (s *OpenF1Stub) serve(w http.ResponseWriter, r *http.Request) {
 		body, have = meetings, haveMeetings
 	case "/sessions":
 		body, have = sessions, haveSessions
+	case "/weather":
+		body, have = weather, haveWeather
 	default:
 		have = false
 	}
@@ -186,4 +237,14 @@ func (s *OpenF1Stub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// intParam reads a numeric query value, treating absent and unparseable alike as 0 — which selects
+// no fixture and so 404s, exactly as the live API does for a season or Session it does not carry.
+func intParam(value string) int {
+	n := 0
+	if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+		return 0
+	}
+	return n
 }

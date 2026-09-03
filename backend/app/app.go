@@ -36,7 +36,8 @@ func NewIngest(conn *sqlx.DB, openF1 *client.OpenF1Client) *services.IngestServi
 	circuitRepo := repository.NewCircuitRepo()
 	meetingRepo := repository.NewMeetingRepo()
 	sessionRepo := repository.NewSessionRepo()
+	weatherRepo := repository.NewWeatherSampleRepo()
 
 	// Services
-	return services.NewIngestService(conn, openF1, circuitRepo, meetingRepo, sessionRepo)
+	return services.NewIngestService(conn, openF1, circuitRepo, meetingRepo, sessionRepo, weatherRepo)
 }
