@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -36,6 +37,21 @@ func (r *SessionRepo) Upsert(ctx context.Context, db sqlx.ExtContext, s *models.
 		return fmt.Errorf("session_repo.Upsert(%d): %w", s.SessionKey, err)
 	}
 	return nil
+}
+
+// CompletedKeys returns the Sessions that had ended by asOf, oldest first — the only ones whose
+// weather is worth fetching, and cancelled ones among them. See plans/01-backend-v1.md, "Stage 2 —
+// Weather Samples (#7)".
+//
+// Oldest first so an interrupted run leaves a contiguous prefix of the corpus behind it.
+func (r *SessionRepo) CompletedKeys(ctx context.Context, db sqlx.ExtContext, asOf time.Time) ([]int, error) {
+	const q = `SELECT session_key FROM f1.sessions WHERE date_end < $1 ORDER BY date_end, session_key`
+
+	var keys []int
+	if err := sqlx.SelectContext(ctx, db, &keys, q, asOf); err != nil {
+		return nil, fmt.Errorf("session_repo.CompletedKeys: %w", err)
+	}
+	return keys, nil
 }
 
 // CountsByYear reports how many Sessions each season already holds. Paired with the Meetings tally,
