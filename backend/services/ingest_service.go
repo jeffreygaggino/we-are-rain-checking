@@ -82,6 +82,13 @@ func (s *IngestService) Run(ctx context.Context) (Summary, error) {
 		if err != nil {
 			return summary, err
 		}
+		// A season that has ended and carries no Meetings is the misconfiguration signal; the season
+		// in progress is exempt, being legitimately empty until its first Meeting is published. See
+		// plans/01-backend-v1.md, "The guard asks about completed seasons only".
+		if year < currentSeason && len(meetings) == 0 {
+			return summary, fmt.Errorf("services.IngestService.Run: %d: %w", year, models.ErrUpstreamEmpty)
+		}
+
 		if err := s.storeSeason(ctx, meetings, sessions); err != nil {
 			return summary, err
 		}
@@ -89,17 +96,6 @@ func (s *IngestService) Run(ctx context.Context) (Summary, error) {
 		summary.SeasonsIngested = append(summary.SeasonsIngested, year)
 		summary.Meetings += len(meetings)
 		summary.Sessions += len(sessions)
-	}
-
-	// Every season the upstream was actually asked about came back empty. The 404 body check cannot
-	// catch this on its own: a wrong OPENF1_BASE_URL answers `{"detail":"No results found."}` for
-	// every path, which reads as "none of these seasons exist" and would otherwise exit 0 over an
-	// empty table. Nothing legitimate looks like this — the upstream carries four seasons.
-	if len(summary.SeasonsIngested) > 0 && summary.Meetings == 0 {
-		return summary, fmt.Errorf(
-			"services.IngestService.Run: %w",
-			models.ErrUpstreamEmpty,
-		)
 	}
 
 	return summary, nil

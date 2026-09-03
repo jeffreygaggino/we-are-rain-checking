@@ -178,9 +178,23 @@ success over an empty table.
 `404 {"detail":"No results found."}` for every path — verified 2026-09-02 against
 `/v1/meetingz?year=2023` — so a misconfigured run reads as "none of these seasons exist", commits
 four empty transactions and exits 0 over an empty table. The exact outcome the body check was
-written to prevent, arriving through the check rather than around it. So a run that fetched at least
-one season and stored no Meeting at all fails with `ErrUpstreamEmpty`. It is scoped to *fetched*
-seasons: a re-run that skips everything already stored has nothing to be empty about.
+written to prevent, arriving through the check rather than around it. So a season that was fetched
+and came back with no Meetings fails with `ErrUpstreamEmpty`. It is scoped to *fetched* seasons: a
+re-run that skips everything already stored has nothing to be empty about.
+
+**The guard asks about completed seasons only (#13).** Its first form — "the run fetched at least one
+season and stored no Meeting at all" — asked the wrong question. The season in progress is never
+skipped, so it is always among the seasons fetched and the "at least one fetched" clause can never be
+false on the success path; what is left is "the season in progress returned zero Meetings", which is
+exactly a new year that has not started racing yet. On 1 January with every earlier season stored,
+ingest exited non-zero on every scheduled run until the first Meeting was published — some two months
+of false alarms a year over a healthy corpus. So the question is now asked per season, of seasons
+strictly before the current year: one that is fetched and comes back empty fails, because nothing
+legitimate looks like that, while an empty season in progress is the ordinary state at the turn of the
+year. A misconfigured base URL still trips it on `FirstSeason`, the first season a run asks about, and
+trips it before any transaction opens rather than after four empty ones. The residual gap — a corpus
+whose first season *is* the current year, where no completed season exists to ask — is not worth a
+knob: `FirstSeason` is 2023 and the clock only moves away from it.
 
 **An interrupt exits 0.** `context.Canceled` reaches `cmd/ingest` as an error, but a scheduler
 draining the binary with SIGTERM leaves precisely the state this design intends — whole seasons,

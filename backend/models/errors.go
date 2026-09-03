@@ -18,11 +18,11 @@ var (
 	// person's results.
 	ErrDriverNotResolved = errors.New("driver not resolved")
 
-	// ErrUpstreamEmpty means every season ingest asked about came back with nothing. OpenF1 answers
-	// a wrong base URL with the same "No results found." it uses for a season it does not carry, so
-	// this is the only thing standing between a misconfiguration and a run that reports success
-	// over an empty table.
-	ErrUpstreamEmpty = errors.New("upstream returned no data for any season")
+	// ErrUpstreamEmpty means a season that has ended came back with nothing. OpenF1 answers a wrong
+	// base URL with the same "No results found." it uses for a season it does not carry, so this is
+	// the only thing standing between a misconfiguration and a run that reports success over an
+	// empty table. A season still in progress is exempt: it is empty until its first Meeting.
+	ErrUpstreamEmpty = errors.New("upstream returned no data for a completed season")
 
 	// ErrUnknownAxis is a bad request on the correlation endpoint.
 	ErrUnknownAxis = errors.New("unknown correlation axis")
