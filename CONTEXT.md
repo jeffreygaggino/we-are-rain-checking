@@ -75,3 +75,15 @@ _Avoid_: Entry, start, result row
 **Axis**:
 One weather property a claim is made about, reported on its own — Rainfall, wind band, track temperature band. Axes are never combined into a single measure of bad weather: they act through different mechanisms, and merging them makes an effect unattributable.
 _Avoid_: Factor, variable, inclement weather
+
+**Season Range**:
+Every season the upstream carries — 2023 to the current year, derived from the clock rather than configured. It is the population every claim is made over, and it names the seasons rather than the rows: say "every Race in these seasons" or "the four seasons" instead of reaching for one collective noun.
+_Avoid_: **Corpus** (see below), dataset, sample (means Weather Sample or Insufficient Sample here)
+
+### Never "corpus"
+
+The word reached 76 lines before being removed on 2026-09-03, and it was naming four different things: the Races every claim is made over, the seeded reference data, whatever OpenF1 holds, and whatever is currently stored. Name the one you mean — "every Race in these seasons", "the seed", "upstream", "seasons already stored".
+
+Two of those senses are a real distinction rather than a stylistic one: 71 driver names exist upstream and 29 appear in a Race, and only the second set is analysed. Collapsing them under one convenient label is the prose form of what ADR-0003 records happening to `driver_number` — two things merged into one identifier, producing something that reads like a finding.
+
+It survives in closed issues, which are left as the record of what was argued at the time.
