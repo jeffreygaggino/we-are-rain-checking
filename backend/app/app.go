@@ -16,14 +16,34 @@ import (
 // New wires repositories, then services, then handlers, then the router — the one order, always.
 //
 // The pool is an argument rather than db.DB so a caller can hand it a database that is not there.
-func New(conn *sqlx.DB) *gin.Engine {
+//
+// The trusted proxies are an argument for a second reason: the policy has to belong to the router
+// rather than to main. The test harness builds its router here too, so a policy applied after this
+// function returned would leave tests trusting every proxy while the deployed service trusted none —
+// and the first handler to read ClientIP() would be tested against the wrong answer. Empty trusts
+// nothing, which makes ClientIP() the peer address rather than a caller's X-Forwarded-For.
+func New(conn *sqlx.DB, trustedProxies []string) (*gin.Engine, error) {
 	// Services
 	healthService := services.NewHealthService(conn)
 
 	// Handlers
 	healthHandler := handlers.NewHealthHandler(healthService)
 
-	return routes.SetupRouter(healthHandler)
+	router := routes.SetupRouter(healthHandler)
+
+	// gin validates the entries, so the loader does not: a second parser would be a second
+	// definition of "valid CIDR", free to drift from the one that actually decides.
+	//
+	// The error travels back rather than exiting here. This function is the one both main and the
+	// harness build through, so a log.Fatalf would let a test kill its own binary — and would put
+	// the boot failure this comment relies on beyond the reach of any test.
+	// Unwrapped: both callers name the source themselves — main the environment variable, the
+	// harness the list it passed — and a wrap here only stutters in front of gin's own message.
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		return nil, err
+	}
+
+	return router, nil
 }
 
 // NewIngest wires the ingest graph, for the same reason New wires the router: cmd/ingest and the
