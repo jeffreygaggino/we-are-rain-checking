@@ -17,10 +17,10 @@ import "github.com/jeffreygaggino/we-are-rain-checking/backend/models"
 const WetSessionThreshold = 0.25
 
 // MinimumSampleSize is the honesty constraint as a value. Below roughly thirty observations the
-// standard error on a rate is wider than any effect this corpus could show, so a split computed
+// standard error on a rate is wider than any effect these seasons could show, so a split computed
 // from fewer is reported as Insufficient Sample rather than as a number.
 //
-// The measured wet corpus is nine Races across four seasons and it cannot grow — the upstream has
+// The measured wet total is nine Races across four seasons and it cannot grow — the upstream has
 // no data before 2023 — so the rainfall axis is expected to sit below this permanently. That is the
 // intended output, not a gap to close.
 const MinimumSampleSize = 30

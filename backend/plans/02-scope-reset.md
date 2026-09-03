@@ -112,7 +112,7 @@ seconds. Both criteria bite.
 ## #10 — the unit of analysis changes
 
 01 leaves the rainfall axis permanently at `insufficient_sample`: nine wet Races against
-`MinimumSampleSize = 30`, over a corpus that cannot grow. The tempting fix is to broaden "wet" into a
+`MinimumSampleSize = 30`, over four seasons that cannot grow. The tempting fix is to broaden "wet" into a
 composite *inclement weather* term until the sample clears the threshold. **Rejected**, for two
 reasons:
 

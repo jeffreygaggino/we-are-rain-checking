@@ -42,7 +42,7 @@ func TestIngestStoresWeatherSamplesForEverySessionThatHasThem(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	stageHealthyWeather(stub)
 
 	seasons := coveredSeasons()
@@ -94,7 +94,7 @@ func TestReIngestingProducesNoDuplicateWeatherSamples(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	stageHealthyWeather(stub)
 
 	ingest := newIngest(t, conn, stub)
@@ -131,7 +131,7 @@ func TestAnObservationTimeTheUpstreamRepeatsIsStoredOnce(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	stageHealthyWeather(stub)
 
 	_, sessions := seasonFixture(services.FirstSeason)
@@ -165,7 +165,7 @@ func TestASessionTheUpstreamHasNoWeatherForIsNotAFailure(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	stageHealthyWeather(stub)
 
 	// One completed Session left unset, so the stub 404s it exactly as the live API does.
@@ -205,7 +205,7 @@ func TestWeatherIsNotFetchedForASessionThatHasNotEndedYet(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	stageHealthyWeather(stub)
 
 	current := time.Now().UTC().Year()
@@ -236,7 +236,7 @@ func TestAFailedWeatherFetchLeavesTheSessionUnstoredAndTheNextRunResumesAtIt(t *
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	stageHealthyWeather(stub)
 
 	// The oldest season's Race: its Practice is fetched first, so the failure lands with one Session
@@ -321,7 +321,7 @@ func weatherFixture(session tests.StubSession) []tests.StubWeatherSample {
 }
 
 // upcomingSessionFixture is a Session on the calendar that has not run — tomorrow, so it stays in
-// the future however long the corpus grows.
+// the future however many seasons are stored.
 func upcomingSessionFixture(year, meetingKey int) tests.StubSession {
 	start := time.Now().UTC().AddDate(0, 0, 1)
 	return tests.StubSession{

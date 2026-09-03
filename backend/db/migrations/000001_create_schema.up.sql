@@ -58,7 +58,7 @@ CREATE TABLE f1.sessions (
 -- Serves the next-Race lookup, which is an ordered scan for the first future Race.
 CREATE INDEX sessions_date_start_idx ON f1.sessions (date_start);
 
--- Serves the corpus scan, which is always "every Race in these seasons".
+-- Serves the analysis scan, which is always "every Race in these seasons".
 CREATE INDEX sessions_year_name_idx ON f1.sessions (year, session_name);
 
 -- rainfall is boolean because this source's flag is binary: across all four seasons the only values
@@ -105,5 +105,5 @@ CREATE TABLE f1.session_results (
 
 -- The primary key already serves "results for one Session". It cannot serve "results for one
 -- Driver" because driver_id is its trailing column, and the correlation endpoint attributes wins to
--- Drivers across the whole corpus — so that read gets its own index.
+-- Drivers across every stored season — so that read gets its own index.
 CREATE INDEX session_results_driver_idx ON f1.session_results (driver_id);

@@ -1,4 +1,5 @@
-// Command ingest fills the Meetings, Sessions and Weather Samples tables from OpenF1.
+// Command ingest fills the Meetings, Sessions, Weather Samples and Session Results tables from
+// OpenF1.
 //
 // It is a scheduled binary and never an HTTP route. That is what makes the absent auth layer safe
 // rather than negligent: the one operation worth protecting is not on the API at all. The two
@@ -55,20 +56,23 @@ func run() error {
 	// SIGTERM leaves exactly the state the design intends — whole seasons, resumable — and a
 	// non-zero exit there would page someone about a working system.
 	if errors.Is(err, context.Canceled) {
-		log.Printf("ingest: interrupted after seasons %v (skipped %v) and %d weather samples from "+
-			"%d sessions — re-run to resume",
-			summary.SeasonsIngested, summary.SeasonsSkipped, summary.WeatherSamples, summary.WeatherSessions)
+		log.Printf("ingest: interrupted after seasons %v (skipped %v), %d weather samples from "+
+			"%d sessions and %d results from %d races — re-run to resume",
+			summary.SeasonsIngested, summary.SeasonsSkipped, summary.WeatherSamples,
+			summary.WeatherSessions, summary.Results, summary.ResultRaces)
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%w (ingested seasons %v, skipped %v, and %d weather samples from %d sessions "+
-			"before failing)",
-			err, summary.SeasonsIngested, summary.SeasonsSkipped, summary.WeatherSamples, summary.WeatherSessions)
+		return fmt.Errorf("%w (ingested seasons %v, skipped %v, %d weather samples from %d sessions "+
+			"and %d results from %d races before failing)",
+			err, summary.SeasonsIngested, summary.SeasonsSkipped, summary.WeatherSamples,
+			summary.WeatherSessions, summary.Results, summary.ResultRaces)
 	}
 
 	log.Printf("ingest: complete — %d meetings and %d sessions across %v, skipped %v; "+
-		"%d weather samples from %d sessions, skipped %d",
+		"%d weather samples from %d sessions, skipped %d; %d results from %d races, skipped %d",
 		summary.Meetings, summary.Sessions, summary.SeasonsIngested, summary.SeasonsSkipped,
-		summary.WeatherSamples, summary.WeatherSessions, summary.WeatherSessionsSkipped)
+		summary.WeatherSamples, summary.WeatherSessions, summary.WeatherSessionsSkipped,
+		summary.Results, summary.ResultRaces, summary.ResultRacesSkipped)
 	return nil
 }

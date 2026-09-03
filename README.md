@@ -112,7 +112,7 @@ One command each, from `backend/`:
 |---|---|
 | `make local` | the whole stack — Postgres, migrations applied, then the API. Returns once `/api/v1/health` answers |
 | `make run` | the API alone against whatever `.env` points at |
-| `make ingest` | fills the corpus from OpenF1. Safe to re-run, safe to interrupt |
+| `make ingest` | fills the tables from OpenF1. Safe to re-run, safe to interrupt |
 | `make test` | starts Postgres, creates the test database, runs every test |
 | `make gate` | fmt-check → vet → docs-check → build → test |
 | `make local-down` | stops the stack |

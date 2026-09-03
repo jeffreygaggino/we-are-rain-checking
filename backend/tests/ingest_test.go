@@ -43,7 +43,7 @@ func TestIngestPopulatesMeetingsAndSessionsAcrossEverySeasonUpstreamCovers(t *te
 	stub := tests.NewOpenF1Stub(t)
 
 	seasons := coveredSeasons()
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	summary, err := newIngest(t, conn, stub).Run(context.Background())
 	if err != nil {
@@ -76,13 +76,13 @@ func TestIngestPopulatesMeetingsAndSessionsAcrossEverySeasonUpstreamCovers(t *te
 	}
 }
 
-// The seeded Circuit is the join the whole corpus hangs off: a Session with the wrong one attributes
-// its weather to the wrong place.
+// The seeded Circuit is the join every Meeting and Session hangs off: a Session with the wrong one
+// attributes its weather to the wrong place.
 func TestIngestedSessionsReferenceTheirSeededCircuit(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	year := services.FirstSeason
 	meetings, sessions := seasonFixture(year)
@@ -115,13 +115,13 @@ func TestIngestedSessionsReferenceTheirSeededCircuit(t *testing.T) {
 
 // A cancelled Session is stored, not dropped — dropping it would make the next re-ingest look like
 // it lost rows. The flag is what #9 and #10 filter on, and a run against the live upstream finds 15
-// of them across the corpus, three of which are Races. Both values are asserted because a tag that
+// of them across the seasons it covers, three of which are Races. Both values are asserted because a tag that
 // always wrote the same one would pass either assertion alone.
 func TestACancelledSessionIsStoredWithItsFlagIntact(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	year := services.FirstSeason
 	meetings, sessions := seasonFixture(year)
@@ -155,7 +155,7 @@ func TestReIngestingTheSameSeasonsProducesNoDuplicateRows(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	ingest := newIngest(t, conn, stub)
 	if _, err := ingest.Run(context.Background()); err != nil {
@@ -182,7 +182,7 @@ func TestReIngestingUpdatesAChangedRowInPlace(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	// The season in progress, because a completed one is skipped on the second run by design — an
 	// upstream correction to a finished season is not something this service goes looking for.
@@ -223,7 +223,7 @@ func TestIngestResumesAtTheSeasonThatFailedRatherThanTheFirst(t *testing.T) {
 	if len(seasons) < 3 {
 		t.Fatalf("this test needs at least three covered seasons, got %d", len(seasons))
 	}
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	interrupted := seasons[len(seasons)-2]
 
 	ingest := newIngest(t, conn, stub)
@@ -272,7 +272,7 @@ func TestIngestAlwaysRefetchesTheCurrentSeason(t *testing.T) {
 
 	seasons := coveredSeasons()
 	current := seasons[len(seasons)-1]
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	ingest := newIngest(t, conn, stub)
 	if _, err := ingest.Run(context.Background()); err != nil {
@@ -339,7 +339,7 @@ func TestIngestReadsTheUpstreams404BodyToTellAnEmptySeasonFromAFault(t *testing.
 	t.Run("any other 404 body is a failure", func(t *testing.T) {
 		conn, _ := tests.RequireDB(t)
 		stub := tests.NewOpenF1Stub(t)
-		stageHealthyCorpus(stub)
+		stageHealthySeasons(stub)
 		stub.FailNext("/meetings", services.FirstSeason, 404, `{"detail":"Unrecognised path."}`)
 
 		_, err := newIngest(t, conn, stub).Run(context.Background())
@@ -379,11 +379,11 @@ func TestIngestFailsRatherThanReportingSuccessOverAnEmptyUpstream(t *testing.T) 
 
 // The guard above must not fire on a run that legitimately had nothing to do: every season already
 // stored is skipped, so no season is fetched and no season can come back empty.
-func TestAFullyStoredCorpusIsNotMistakenForAnEmptyUpstream(t *testing.T) {
+func TestEverySeasonAlreadyStoredIsNotMistakenForAnEmptyUpstream(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 	ingest := newIngest(t, conn, stub)
 	if _, err := ingest.Run(context.Background()); err != nil {
 		t.Fatalf("first Run: %v", err)
@@ -392,7 +392,7 @@ func TestAFullyStoredCorpusIsNotMistakenForAnEmptyUpstream(t *testing.T) {
 	// The current season is still re-fetched and still has rows, so the run is not empty — but if it
 	// were the last season standing, an over-eager guard would fail a healthy re-run.
 	if _, err := ingest.Run(context.Background()); err != nil {
-		t.Fatalf("second Run: %v — a re-run over a stored corpus is not an empty upstream", err)
+		t.Fatalf("second Run: %v — a re-run over seasons already stored is not an empty upstream", err)
 	}
 }
 
@@ -488,7 +488,7 @@ func TestIngestPacesItsRequestsToTheConfiguredInterval(t *testing.T) {
 	// Well clear of the database work the run interleaves between seasons — an unpaced run spans 15ms
 	// end to end — so the floor below still has teeth if pacing is removed.
 	const interval = 100 * time.Millisecond
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	ingest := app.NewIngest(conn, client.NewOpenF1Client(stub.BaseURL(), 5*time.Second, interval))
 	if _, err := ingest.Run(context.Background()); err != nil {
@@ -538,7 +538,7 @@ func TestIngestStopsOnACancelledContextWithoutWriting(t *testing.T) {
 	conn, _ := tests.RequireDB(t)
 	stub := tests.NewOpenF1Stub(t)
 
-	stageHealthyCorpus(stub)
+	stageHealthySeasons(stub)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -582,11 +582,11 @@ func setSeason(stub *tests.OpenF1Stub, year int) {
 	stub.SetSeason(year, meetings, sessions)
 }
 
-// stageHealthyCorpus gives the stub every season a run covers, which is what the upstream looks like
+// stageHealthySeasons gives the stub every season a run covers, which is what the upstream looks like
 // on a healthy day. It is the default fixture: a completed season the stub 404s is an empty upstream
 // (#13), so a test about anything else stages them all and leaves the gaps to the tests asserting on
 // them — those set their seasons directly, because which season is missing is their subject.
-func stageHealthyCorpus(stub *tests.OpenF1Stub) {
+func stageHealthySeasons(stub *tests.OpenF1Stub) {
 	for _, year := range coveredSeasons() {
 		setSeason(stub, year)
 	}

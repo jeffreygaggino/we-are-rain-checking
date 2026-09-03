@@ -18,10 +18,24 @@ import (
 // own and needs no configuration.
 const FirstSeason = 2023
 
+// ResultsSettleWindow is how long after a Race ends before its classification is fetched.
+//
+// Stage 2's resumption rests on a completed Session's weather never changing. A Race's
+// classification does change: the grid that crosses the line is provisional until the stewards are
+// done, and a penalty applied afterwards moves positions, points and a dsq flag — the three things
+// #10 reads. Since a Race with rows is then skipped without a request, a run that arrived an hour
+// after the flag would freeze the provisional grid permanently.
+//
+// A day is the judgement, not a measurement: it clears same-evening stewarding comfortably, and it
+// costs data that is only ever read historically nothing at all. An appeal decided later than
+// this is not picked up — delete the Race's rows and re-run, which the upsert makes safe. See
+// plans/04-session-results.md.
+const ResultsSettleWindow = 24 * time.Hour
+
 // Summary is what a completed run reports to its operator. Seasons skipped is the number that says
 // resumption worked; a run that re-fetched everything shows an empty one.
 //
-// Weather is counted rather than listed: the skipped ones are the whole corpus on a healthy re-run,
+// Weather is counted rather than listed: the skipped ones are every stored Session on a healthy re-run,
 // some five hundred Sessions, which is a number to read and not a list.
 type Summary struct {
 	SeasonsIngested        []int
@@ -31,9 +45,13 @@ type Summary struct {
 	WeatherSamples         int
 	WeatherSessions        int
 	WeatherSessionsSkipped int
+	Results                int
+	ResultRaces            int
+	ResultRacesSkipped     int
 }
 
-// IngestService fills the Meetings, Sessions and Weather Samples tables from OpenF1.
+// IngestService fills the Meetings, Sessions, Weather Samples and Session Results tables from
+// OpenF1.
 //
 // It is reached from cmd/ingest and never from a route: dropping the auth layer is only safe because
 // the one operation worth protecting is not on the API at all (ADR-0001).
@@ -41,35 +59,42 @@ type IngestService struct {
 	conn     *sqlx.DB
 	openF1   *client.OpenF1Client
 	circuits *repository.CircuitRepo
+	drivers  *repository.DriverRepo
 	meetings *repository.MeetingRepo
 	sessions *repository.SessionRepo
 	weather  *repository.WeatherSampleRepo
+	results  *repository.SessionResultRepo
 }
 
 func NewIngestService(
 	conn *sqlx.DB,
 	openF1 *client.OpenF1Client,
 	circuits *repository.CircuitRepo,
+	drivers *repository.DriverRepo,
 	meetings *repository.MeetingRepo,
 	sessions *repository.SessionRepo,
 	weather *repository.WeatherSampleRepo,
+	results *repository.SessionResultRepo,
 ) *IngestService {
 	return &IngestService{
 		conn:     conn,
 		openF1:   openF1,
 		circuits: circuits,
+		drivers:  drivers,
 		meetings: meetings,
 		sessions: sessions,
 		weather:  weather,
+		results:  results,
 	}
 }
 
 // Run ingests every season the upstream covers, oldest first, skipping the ones already stored, then
-// fills in the Weather Samples of every Session that has ended.
+// fills in the Weather Samples of every Session that has ended and the classification of every Race
+// that has run.
 //
 // Oldest first is what makes an interrupted run resumable: the seasons behind the failure are
-// complete, so the next run starts at the one that failed. Weather comes second because it is keyed
-// on the Sessions the first half stores.
+// complete, so the next run starts at the one that failed. The two later stages come second because
+// both are keyed on the Sessions the first stores.
 func (s *IngestService) Run(ctx context.Context) (Summary, error) {
 	var summary Summary
 
@@ -116,6 +141,10 @@ func (s *IngestService) Run(ctx context.Context) (Summary, error) {
 	}
 
 	if err := s.ingestWeather(ctx, &summary); err != nil {
+		return summary, err
+	}
+
+	if err := s.ingestResults(ctx, &summary); err != nil {
 		return summary, err
 	}
 
@@ -203,6 +232,171 @@ func (s *IngestService) storeSamples(ctx context.Context, samples []models.Weath
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("services.IngestService.storeSamples commit: %w", err)
+	}
+	return nil
+}
+
+// ingestResults fills in the classification of every Race that has settled and holds none — the
+// Session rule of ingestWeather again, one table across, with the settle window ResultsSettleWindow
+// explains. See plans/04-session-results.md.
+//
+// Races only: an entry list outside a Race carries names this repo does not seed, and under
+// ADR-0003 every one of them aborts the run.
+func (s *IngestService) ingestResults(ctx context.Context, summary *Summary) error {
+	driverIDs, err := s.drivers.NamesToIDs(ctx, s.conn)
+	if err != nil {
+		return fmt.Errorf("services.IngestService.ingestResults: %w", err)
+	}
+	if len(driverIDs) == 0 {
+		return fmt.Errorf("services.IngestService.ingestResults: no seeded drivers — run the migrations first")
+	}
+
+	races, err := s.sessions.CompletedRaceKeys(ctx, s.conn, time.Now().UTC().Add(-ResultsSettleWindow))
+	if err != nil {
+		return fmt.Errorf("services.IngestService.ingestResults: %w", err)
+	}
+	stored, err := s.results.SessionKeysWithResults(ctx, s.conn)
+	if err != nil {
+		return fmt.Errorf("services.IngestService.ingestResults: %w", err)
+	}
+
+	for _, sessionKey := range races {
+		if stored[sessionKey] {
+			summary.ResultRacesSkipped++
+			continue
+		}
+
+		results, err := s.fetchRaceResults(ctx, sessionKey, driverIDs)
+		if err != nil {
+			return err
+		}
+		if err := s.storeResults(ctx, results); err != nil {
+			return err
+		}
+		// Counted only when it stored something. A Race the upstream has no classification for is
+		// neither ingested nor skipped — it is the third state this stage has, and reporting it as
+		// ingested would make the tally look stable while the same Races were re-asked every run.
+		if len(results) == 0 {
+			continue
+		}
+
+		summary.ResultRaces++
+		summary.Results += len(results)
+	}
+
+	return nil
+}
+
+// fetchRaceResults reads one Race's classification and resolves every Racing Number in it to a
+// seeded Driver, before storeResults opens a transaction — the property every stage keeps, and the
+// one that makes "this Race has rows" a safe thing to skip on.
+//
+// The classification is read first: a Race the upstream has no results for needs no entry list, and
+// there are fourteen of those today.
+func (s *IngestService) fetchRaceResults(
+	ctx context.Context,
+	sessionKey int,
+	driverIDs map[string]uuid.UUID,
+) ([]models.SessionResult, error) {
+	upstream, err := s.openF1.SessionResults(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(upstream) == 0 {
+		return nil, nil
+	}
+
+	names, err := s.raceEntryList(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]models.SessionResult, 0, len(upstream))
+	classified := make(map[uuid.UUID]int, len(upstream))
+	for _, u := range upstream {
+		fullName, ok := names[u.RacingNumber]
+		if !ok {
+			return nil, fmt.Errorf("session %d classifies racing number %d, which its entry list does "+
+				"not carry: %w", sessionKey, u.RacingNumber, models.ErrDriverNotResolved)
+		}
+		driverID, ok := driverIDs[fullName]
+		if !ok {
+			return nil, fmt.Errorf("session %d classifies %q, who is not seeded: %w",
+				sessionKey, fullName, models.ErrDriverNotResolved)
+		}
+		// Two numbers resolving to one Driver would write two rows on one primary key, and the
+		// second would overwrite the first inside the transaction — a Driver dropped from the grid
+		// with the run still reporting success.
+		if number, ok := classified[driverID]; ok {
+			return nil, fmt.Errorf("session %d classifies %q under racing numbers %d and %d: %w",
+				sessionKey, fullName, number, u.RacingNumber, models.ErrDriverNotResolved)
+		}
+		classified[driverID] = u.RacingNumber
+
+		results = append(results, models.SessionResult{
+			SessionKey:   u.SessionKey,
+			DriverID:     driverID,
+			RacingNumber: u.RacingNumber,
+			Position:     u.Position,
+			Points:       u.Points,
+			NumberOfLaps: u.NumberOfLaps,
+			DNF:          u.DNF,
+			DNS:          u.DNS,
+			DSQ:          u.DSQ,
+		})
+	}
+	return results, nil
+}
+
+// raceEntryList reads one Race's entry list as `racing number -> upstream name`. It is the middle
+// step of ADR-0003's resolution, and it is per Session: a number reassigned between seasons — or
+// mid-season — lands on the person who actually carried it that weekend.
+//
+// The names are not resolved to Drivers here. Only the numbers a result row classifies matter, and
+// resolving the rest would let an entrant nobody classified — a withdrawal, a reserve listed and not
+// run — abort a run that has nothing to store for them.
+//
+// One number under two names does abort, here where it is visible: last-write-wins over an ambiguous
+// number resolves into a plausible-looking finding, which is the failure ADR-0003 was written about.
+func (s *IngestService) raceEntryList(ctx context.Context, sessionKey int) (map[int]string, error) {
+	entrants, err := s.openF1.SessionDrivers(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make(map[int]string, len(entrants))
+	for _, entrant := range entrants {
+		if seen, ok := names[entrant.RacingNumber]; ok && seen != entrant.FullName {
+			return nil, fmt.Errorf("session %d gives racing number %d to both %q and %q: %w",
+				sessionKey, entrant.RacingNumber, seen, entrant.FullName, models.ErrDriverNotResolved)
+		}
+		names[entrant.RacingNumber] = entrant.FullName
+	}
+	return names, nil
+}
+
+// storeResults writes one Race's classification in one transaction, for the reason storeSamples and
+// storeSeason each write theirs in one: a half-stored Race has rows, and the rule that skips any
+// Race with rows would strand it.
+func (s *IngestService) storeResults(ctx context.Context, results []models.SessionResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	tx, err := s.conn.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("services.IngestService.storeResults: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for i := range results {
+		if err := s.results.Upsert(ctx, tx, &results[i]); err != nil {
+			return fmt.Errorf("services.IngestService.storeResults: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("services.IngestService.storeResults commit: %w", err)
 	}
 	return nil
 }

@@ -18,7 +18,7 @@ func TestThePackageSchemaSurvivesFromOneAcquisitionToTheNext(t *testing.T) {
 
 	const marker = "00000000-0000-4000-8000-0000000015c1"
 	t.Cleanup(func() {
-		// The seeded corpus is exactly 26 Circuits to the tests that count them, so this one goes
+		// The seed is exactly 26 Circuits to the tests that count them, so this one goes
 		// back out however this test ends.
 		if _, err := first.Exec(`DELETE FROM f1.circuits WHERE id = $1`, marker); err != nil {
 			t.Errorf("removing the marker circuit: %v", err)
@@ -51,7 +51,7 @@ func TestACleanSlateEmptiesTheIngestedTablesAndKeepsTheSeededReferenceData(t *te
 	conn, _ := tests.RequireDB(t)
 
 	// Counted rather than hardcoded: the property is that the truncation does not touch these, which
-	// holds whatever the corpus grows to, and a literal here would need editing every time it does.
+	// holds whatever the seed grows to, and a literal here would need editing every time it does.
 	circuitsBefore := countRows(t, conn, "circuits")
 	driversBefore := countRows(t, conn, "drivers")
 

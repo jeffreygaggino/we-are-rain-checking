@@ -24,6 +24,8 @@ type OpenF1Stub struct {
 	meetings map[int][]StubMeeting
 	sessions map[int][]StubSession
 	weather  map[int][]StubWeatherSample
+	results  map[int][]StubSessionResult
+	entrants map[int][]StubDriver
 	faults   map[string]stubFault
 	delay    time.Duration
 	requests []StubRequest
@@ -77,6 +79,42 @@ type StubWeatherSample struct {
 	TrackTemperature float64 `json:"track_temperature"`
 }
 
+// StubSessionResult is one row of `GET /session_result`, in the upstream's field names.
+//
+// Every field the client reads is a pointer, because every one of them arrives null somewhere in the
+// live data or is strict in the client — and a fixture that cannot omit a field cannot stage the
+// row that proves the strictness.
+//
+// GapToLeader is raw JSON: upstream sends `0`, `11.987`, `"+1 LAP"` and `null` in the one field, and
+// this repo stores none of them. Carrying it here as it arrives is what shows the client's decode is
+// unbothered by the union rather than merely untested against it.
+type StubSessionResult struct {
+	Position     *int            `json:"position"`
+	DriverNumber int             `json:"driver_number"`
+	NumberOfLaps *int            `json:"number_of_laps"`
+	Points       *float64        `json:"points"`
+	DNF          *bool           `json:"dnf"`
+	DNS          *bool           `json:"dns"`
+	DSQ          *bool           `json:"dsq"`
+	Duration     *float64        `json:"duration"`
+	GapToLeader  json.RawMessage `json:"gap_to_leader,omitempty"`
+	MeetingKey   int             `json:"meeting_key"`
+	SessionKey   int             `json:"session_key"`
+}
+
+// StubDriver is one row of `GET /drivers` — one Session's entry list, which is the only thing that
+// says which person carried a Racing Number that weekend (ADR-0003). The live row carries a headshot
+// URL, a team colour and both name halves besides.
+type StubDriver struct {
+	MeetingKey    int    `json:"meeting_key"`
+	SessionKey    int    `json:"session_key"`
+	DriverNumber  int    `json:"driver_number"`
+	BroadcastName string `json:"broadcast_name"`
+	FullName      string `json:"full_name"`
+	NameAcronym   string `json:"name_acronym"`
+	TeamName      string `json:"team_name"`
+}
+
 // StubRequest is one call the stub served. At is what the pacing assertion measures.
 //
 // Year and SessionKey are both here because the two shapes of request this stub serves select
@@ -103,6 +141,8 @@ func NewOpenF1Stub(t *testing.T) *OpenF1Stub {
 		meetings: map[int][]StubMeeting{},
 		sessions: map[int][]StubSession{},
 		weather:  map[int][]StubWeatherSample{},
+		results:  map[int][]StubSessionResult{},
+		entrants: map[int][]StubDriver{},
 		faults:   map[string]stubFault{},
 	}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -126,13 +166,48 @@ func (s *OpenF1Stub) SetSeason(year int, meetings []StubMeeting, sessions []Stub
 	s.sessions[year] = slices.Clone(sessions)
 }
 
-// SetWeather gives the stub one Session's Weather Samples. A Session never set 404s as "No results
-// found." — which is what the live API does for a Session it holds no weather for, a cancelled one
-// included. Copied for the same reason SetSeason copies.
+// SetWeather gives the stub one Session's Weather Samples. A Session never set — and one set back to
+// nil — 404s as "No results found.", which is what the live API does for a Session it holds no
+// weather for, a cancelled one included. Copied for the same reason SetSeason copies.
+//
+// nil unsets rather than staging an empty array, because "the upstream has nothing for this Session"
+// arrives as a 404 and never as `200 []`. Staged as a present-but-empty fixture, a test claiming to
+// exercise the 404 discrimination would pass without ever reaching it.
 func (s *OpenF1Stub) SetWeather(sessionKey int, samples []StubWeatherSample) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if samples == nil {
+		delete(s.weather, sessionKey)
+		return
+	}
 	s.weather[sessionKey] = slices.Clone(samples)
+}
+
+// SetSessionResults gives the stub one Session's classification. A Session never set — or set back
+// to nil — 404s as "No results found.", what the live API does for a Race still to run or a
+// cancelled one, probed against `session_result?session_key=9086` on 2026-09-03. Copied for the
+// reason SetSeason copies, and nil unsets for the reason SetWeather's does.
+func (s *OpenF1Stub) SetSessionResults(sessionKey int, results []StubSessionResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if results == nil {
+		delete(s.results, sessionKey)
+		return
+	}
+	s.results[sessionKey] = slices.Clone(results)
+}
+
+// SetSessionDrivers gives the stub one Session's entry list. Set separately from the results so a
+// test can stage the two disagreeing — a number the entry list does not carry, or one carried twice
+// — which is where ADR-0003's resolution either holds or silently merges two people.
+func (s *OpenF1Stub) SetSessionDrivers(sessionKey int, drivers []StubDriver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if drivers == nil {
+		delete(s.entrants, sessionKey)
+		return
+	}
+	s.entrants[sessionKey] = slices.Clone(drivers)
 }
 
 // FailNext arms a one-shot fault on one path for one season. It is keyed on the year because "the
@@ -199,6 +274,8 @@ func (s *OpenF1Stub) serve(w http.ResponseWriter, r *http.Request) {
 	meetings, haveMeetings := s.meetings[year]
 	sessions, haveSessions := s.sessions[year]
 	weather, haveWeather := s.weather[sessionKey]
+	results, haveResults := s.results[sessionKey]
+	entrants, haveEntrants := s.entrants[sessionKey]
 	s.mu.Unlock()
 
 	if delay > 0 {
@@ -224,6 +301,10 @@ func (s *OpenF1Stub) serve(w http.ResponseWriter, r *http.Request) {
 		body, have = sessions, haveSessions
 	case "/weather":
 		body, have = weather, haveWeather
+	case "/session_result":
+		body, have = results, haveResults
+	case "/drivers":
+		body, have = entrants, haveEntrants
 	default:
 		have = false
 	}

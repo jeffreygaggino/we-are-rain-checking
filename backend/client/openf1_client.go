@@ -99,6 +99,33 @@ type WeatherSample struct {
 	WindDirection    *int
 }
 
+// SessionResult is one Driver's classification in one Session, as the upstream reports it.
+//
+// RacingNumber is the upstream's `driver_number` and is not an identity — resolving it to a seeded
+// Driver is the caller's job, per Session, because only the caller has the database (ADR-0003).
+//
+// Position and NumberOfLaps are pointers because a Retirement genuinely has neither. The three flags
+// are not: they are what #10 counts, so a missing one fails at the boundary rather than reading as a
+// finish. See plans/04-session-results.md.
+type SessionResult struct {
+	SessionKey   int
+	RacingNumber int
+	Position     *int
+	Points       float64
+	NumberOfLaps *int
+	DNF          bool
+	DNS          bool
+	DSQ          bool
+}
+
+// SessionDriver is one entry of a Session's entry list: the mapping from a Racing Number to the
+// upstream's display name, for that Session and no other.
+type SessionDriver struct {
+	SessionKey   int
+	RacingNumber int
+	FullName     string
+}
+
 // meetingRow, sessionRow and weatherRow are the wire. Timestamps arrive as strings rather than
 // time.Time so a missing or malformed one is an error naming the field, instead of a zero time
 // flowing into a NOT NULL column.
@@ -137,6 +164,30 @@ type weatherRow struct {
 	Pressure         *float64 `json:"pressure"`
 	WindSpeed        *float64 `json:"wind_speed"`
 	WindDirection    *int     `json:"wind_direction"`
+}
+
+// sessionResultRow is the wire. Every measured field is a pointer, so "the upstream sent null" and
+// "the upstream sent 0" stay different facts — points 0 is most of the grid, and dnf false is a
+// finish.
+//
+// `gap_to_leader` and `duration` are absent deliberately: the first is a union of 0, 11.987,
+// "+1 LAP" and null in one field, neither is read by any endpoint, and Go ignores what it has no
+// field for. See plans/01-backend-v1.md.
+type sessionResultRow struct {
+	SessionKey   int      `json:"session_key"`
+	DriverNumber *int     `json:"driver_number"`
+	Position     *int     `json:"position"`
+	Points       *float64 `json:"points"`
+	NumberOfLaps *int     `json:"number_of_laps"`
+	DNF          *bool    `json:"dnf"`
+	DNS          *bool    `json:"dns"`
+	DSQ          *bool    `json:"dsq"`
+}
+
+type sessionDriverRow struct {
+	SessionKey   int    `json:"session_key"`
+	DriverNumber *int   `json:"driver_number"`
+	FullName     string `json:"full_name"`
 }
 
 // Meetings returns every Meeting of a season. A season the upstream does not carry is an empty
@@ -218,15 +269,8 @@ func (c *OpenF1Client) WeatherSamples(ctx context.Context, sessionKey int) ([]We
 			return nil, fmt.Errorf("openf1.WeatherSamples(%d): sample at %s: upstream sent no rainfall",
 				sessionKey, observedAt)
 		}
-		// The filter is the upstream's to honour, so it is checked rather than assumed. A row for
-		// another Session stored under this one would leave the Session asked for still empty — and
-		// so re-asked on every run, the resumption rule defeated silently.
-		if row.SessionKey != sessionKey {
-			return nil, &models.UpstreamError{
-				Upstream: UpstreamOpenF1,
-				Message: fmt.Sprintf("weather for session %d answered with a sample for session %d",
-					sessionKey, row.SessionKey),
-			}
+		if err := checkSession("weather", sessionKey, row.SessionKey); err != nil {
+			return nil, err
 		}
 		samples = append(samples, WeatherSample{
 			SessionKey:       row.SessionKey,
@@ -241,6 +285,89 @@ func (c *OpenF1Client) WeatherSamples(ctx context.Context, sessionKey int) ([]We
 		})
 	}
 	return samples, nil
+}
+
+// SessionResults returns one Session's classification. A Session the upstream holds no results for
+// — a Race still to run, and a cancelled one — is an empty slice and no error, the same answer shape
+// its weather gets.
+func (c *OpenF1Client) SessionResults(ctx context.Context, sessionKey int) ([]SessionResult, error) {
+	var rows []sessionResultRow
+	if err := c.get(ctx, "/session_result", sessionQuery(sessionKey), &rows); err != nil {
+		return nil, fmt.Errorf("openf1.SessionResults(%d): %w", sessionKey, err)
+	}
+
+	results := make([]SessionResult, 0, len(rows))
+	for _, row := range rows {
+		if err := checkSession("session_result", sessionKey, row.SessionKey); err != nil {
+			return nil, err
+		}
+		if row.DriverNumber == nil {
+			return nil, fmt.Errorf("openf1.SessionResults(%d): a result row carries no driver_number",
+				sessionKey)
+		}
+		// Absent flags and absent points are shape changes rather than observations: across the
+		// 1,661 Race result rows upstream none of the four is ever null, and each of them reads
+		// as an ordinary value if guessed — a finish, or a scoreless race.
+		if row.DNF == nil || row.DNS == nil || row.DSQ == nil {
+			return nil, fmt.Errorf("openf1.SessionResults(%d): driver %d: upstream sent no dnf/dns/dsq",
+				sessionKey, *row.DriverNumber)
+		}
+		if row.Points == nil {
+			return nil, fmt.Errorf("openf1.SessionResults(%d): driver %d: upstream sent no points",
+				sessionKey, *row.DriverNumber)
+		}
+		results = append(results, SessionResult{
+			SessionKey:   row.SessionKey,
+			RacingNumber: *row.DriverNumber,
+			Position:     row.Position,
+			Points:       *row.Points,
+			NumberOfLaps: row.NumberOfLaps,
+			DNF:          *row.DNF,
+			DNS:          *row.DNS,
+			DSQ:          *row.DSQ,
+		})
+	}
+	return results, nil
+}
+
+// SessionDrivers returns one Session's entry list — the Racing Numbers of that Session and the names
+// they belonged to, which is the only thing upstream that ties a number to a person for a given
+// weekend (ADR-0003).
+func (c *OpenF1Client) SessionDrivers(ctx context.Context, sessionKey int) ([]SessionDriver, error) {
+	var rows []sessionDriverRow
+	if err := c.get(ctx, "/drivers", sessionQuery(sessionKey), &rows); err != nil {
+		return nil, fmt.Errorf("openf1.SessionDrivers(%d): %w", sessionKey, err)
+	}
+
+	drivers := make([]SessionDriver, 0, len(rows))
+	for _, row := range rows {
+		if err := checkSession("drivers", sessionKey, row.SessionKey); err != nil {
+			return nil, err
+		}
+		if row.DriverNumber == nil || row.FullName == "" {
+			return nil, fmt.Errorf("openf1.SessionDrivers(%d): an entry carries no driver_number or "+
+				"no full_name, so it resolves nothing", sessionKey)
+		}
+		drivers = append(drivers, SessionDriver{
+			SessionKey:   row.SessionKey,
+			RacingNumber: *row.DriverNumber,
+			FullName:     row.FullName,
+		})
+	}
+	return drivers, nil
+}
+
+// checkSession holds the upstream to the filter it was given. A row for another Session stored under
+// this one would leave the Session asked for still empty — and so re-asked on every run, the
+// resumption rule defeated silently — or, worse here, attribute one Race's classification to another.
+func checkSession(what string, asked, got int) error {
+	if got == asked {
+		return nil
+	}
+	return &models.UpstreamError{
+		Upstream: UpstreamOpenF1,
+		Message:  fmt.Sprintf("%s for session %d answered with a row for session %d", what, asked, got),
+	}
 }
 
 func seasonQuery(year int) url.Values { return url.Values{"year": {strconv.Itoa(year)}} }
