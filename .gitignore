@@ -3,6 +3,9 @@
 *.exe
 backend/tmp/
 
+# database snapshots — see backend/plans/06-dev-database-snapshot.md
+backend/snapshots/
+
 # env / secrets
 .env
 .env.*
