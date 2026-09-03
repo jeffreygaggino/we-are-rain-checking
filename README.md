@@ -113,9 +113,20 @@ One command each, from `backend/`:
 | `make local` | the whole stack — Postgres, migrations applied, then the API. Returns once `/api/v1/health` answers |
 | `make run` | the API alone against whatever `.env` points at |
 | `make ingest` | fills the tables from OpenF1. Safe to re-run, safe to interrupt |
+| `make dump` | writes the ingested data to a snapshot — gitignored, ~0.6 MB |
+| `make restore` | loads that snapshot into an empty dev database |
 | `make test` | starts Postgres, creates the test database, runs every test |
 | `make gate` | fmt-check → vet → docs-check → build → test |
 | `make local-down` | stops the stack |
+
+**Two ways to fill a fresh clone, and the trade between them.** A cold ingest is ~530 paced requests against OpenF1's 30 req/min ceiling — 8 for Meetings and Sessions, 440 for the Weather Samples of every completed Session, ~167 for the classification of every settled Race. **About 22 minutes**, and that pacing is the upstream's rate limit rather than a defect.
+
+```
+clone → make local → make ingest    ~22 minutes, needs OpenF1
+clone → make local → make restore   seconds, needs a snapshot someone made earlier
+```
+
+The snapshot carries the migration version it was taken at, so `make restore` applies any migrations the repo has gained since — and refuses, naming the version, if the snapshot is *ahead* of the repo rather than serving a schema nothing here describes. It is a convenience and never a source of truth: `make ingest` after a restore re-fetches only what the snapshot missed. Nothing in the service depends on a dump existing.
 
 ## Where things are written down
 
