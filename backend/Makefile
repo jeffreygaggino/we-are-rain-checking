@@ -19,11 +19,28 @@ TEST_ENV = DB_HOST=$(TEST_DB_HOST) DB_PORT=$(TEST_DB_PORT) DB_NAME=$(TEST_DB_NAM
 
 # ── Local development ─────────────────────────────────────────────────────────
 
+# Prefix for the targets that need .env. Nothing in the module reads that file — config.LoadConfig
+# reads the environment — so the shell loads it: `set -a` exports every assignment the file makes,
+# and turns off again after.
+#
+# The [ -f ] guard does not make .env optional. It holds the credentials, and a run without it still
+# dies, on `config: DB_HOST is required`. The guard only decides which error you get: the loader
+# naming the variable it wanted, rather than `.` complaining about a file that is not there. Its own
+# failure is harmless — make judges the line by its last command, which is the go run.
+#
+# `DB_HOST is required` therefore has two causes. No .env is this one. An .env that was never
+# sourced is the other, and is the confusing one — see the ingest target below.
+DOTENV = set -a; [ -f .env ] && . ./.env; set +a;
+
 .PHONY: tidy build docs run test local local-down migrate-up migrate-down ingest
 tidy:  ; @go mod tidy
 docs:  ; @swag init
 build: ; @go build ./...
-run:   ; @go run .
+
+# #12 made .env load bearing here rather than a convenience: the serving mode now defaults to
+# release, so a `make run` that could not see GIN_MODE=debug would serve a development machine with
+# no route table at all.
+run:   ; @$(DOTENV) go run .
 
 # The whole stack from one command: Postgres, the migrations applied, then the API. --wait returns
 # once the API's health check passes, so a green `make local` means the service answers.
@@ -37,11 +54,10 @@ migrate-down: ; @go run ./cmd/migrate -direction down
 # seconds and a re-run about six — seasons already stored are skipped without a request. Safe to
 # re-run and safe to interrupt.
 #
-# Nothing in the module reads .env — config.LoadConfig reads the environment — so the target sources
-# it. Without this, `make ingest` on a fresh clone dies on `DB_HOST is required` despite .env sitting
-# right there. `make run` has the same gap and is left alone: it is not this ticket's target.
-ingest:
-	@set -a; [ -f .env ] && . ./.env; set +a; go run ./cmd/ingest
+# Without DOTENV, `make ingest` on a fresh clone dies on `DB_HOST is required` despite .env sitting
+# right there. Same message a missing .env gives (see DOTENV above), and the file being present is
+# exactly what makes it hard to read — you go looking at the file rather than at what reads it.
+ingest: ; @$(DOTENV) go run ./cmd/ingest
 
 # test-db brings up the local Postgres and creates the test database if it is missing. Tests apply
 # the migrations themselves, so this only has to hand them an empty database that exists.

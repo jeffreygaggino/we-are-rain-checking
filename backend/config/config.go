@@ -13,6 +13,9 @@ type Config struct {
 	PublicURL   string
 	APIBasePath string
 
+	GinMode        string
+	TrustedProxies []string
+
 	DBHost     string
 	DBPort     string
 	DBName     string
@@ -41,6 +44,11 @@ func LoadConfig() {
 	cfg.PublicURL = envOr("PUBLIC_URL", "localhost:"+cfg.Port)
 	cfg.APIBasePath = envOr("API_BASE_PATH", "/api/v1")
 
+	cfg.GinMode = ginMode()
+	// Empty means trust nothing, so ClientIP() is the peer address rather than whatever
+	// X-Forwarded-For a caller sends. See plans/05-production-defaults.md § "The proxies".
+	cfg.TrustedProxies = envList("TRUSTED_PROXIES")
+
 	cfg.DBHost = mustEnv("DB_HOST")
 	cfg.DBPort = envOr("DB_PORT", "5432")
 	cfg.DBName = mustEnv("DB_NAME")
@@ -57,6 +65,41 @@ func LoadConfig() {
 	// OpenF1 documents 30 req/min; 2100ms between calls leaves headroom under both that and the
 	// 3 req/s ceiling.
 	cfg.IngestMinInterval = envDuration("INGEST_MIN_INTERVAL", 2100*time.Millisecond)
+}
+
+// gin's mode names, spelled out rather than imported: this loader is linked into cmd/migrate and
+// cmd/ingest, neither of which serves HTTP.
+const (
+	ginModeDebug   = "debug"
+	ginModeRelease = "release"
+)
+
+// ginMode reads the serving mode, defaulting to release. That is the DB_SSLMODE shape — the
+// development machine opts out, the deployed service does not have to opt in. gin reads GIN_MODE in
+// its own init() and picks debug when it is empty; that one disagreement is the whole point.
+//
+// gin's TestMode is not accepted here. It is a real mode but not a way to serve, and the test
+// harness sets it in Go where it belongs.
+func ginMode() string {
+	switch v := envOr("GIN_MODE", ginModeRelease); v {
+	case ginModeDebug, ginModeRelease:
+		return v
+	default:
+		log.Fatalf("config: GIN_MODE = %q, want %q or %q", v, ginModeDebug, ginModeRelease)
+		return ""
+	}
+}
+
+// envList reads a comma-separated list, dropping blanks so a trailing comma is not an empty entry.
+// Unset and empty both give nil, which is what callers read as "none".
+func envList(key string) []string {
+	var out []string
+	for _, part := range strings.Split(os.Getenv(key), ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func envOr(key, fallback string) string {

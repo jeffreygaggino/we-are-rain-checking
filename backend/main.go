@@ -7,6 +7,8 @@ package main
 import (
 	"log"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/app"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/config"
 	"github.com/jeffreygaggino/we-are-rain-checking/backend/db"
@@ -26,11 +28,19 @@ func main() {
 	// start. The health route covers the database going away afterwards.
 	db.ConnectDatabase(cfg)
 
+	// Before app.New, not after: gin prints the route table as each route is registered, so a mode
+	// set afterwards arrives too late to quiet the boot. Release unless GIN_MODE says otherwise —
+	// see plans/05-production-defaults.md.
+	gin.SetMode(cfg.GinMode)
+
 	// Where a proxy publishes this API, which is not where the router serves it.
 	docs.SwaggerInfo.Host = cfg.PublicURL
 	docs.SwaggerInfo.BasePath = cfg.APIBasePath
 
-	router := app.New(db.DB)
+	router, err := app.New(db.DB, cfg.TrustedProxies)
+	if err != nil {
+		log.Fatalf("config: TRUSTED_PROXIES: %v", err)
+	}
 
 	log.Printf("api: listening on %s", config.Address())
 	if err := router.Run(config.Address()); err != nil {

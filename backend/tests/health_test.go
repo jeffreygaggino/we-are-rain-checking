@@ -30,7 +30,7 @@ func TestHealthReportsDatabaseConnectivityWhenPostgresIsReachable(t *testing.T) 
 // The other half of the same claim: with the database gone, the route fails. Together these two are
 // what makes the route worth having — one alone is satisfied by a handler that always answers.
 func TestHealthFailsWhenTheDatabaseIsUnreachable(t *testing.T) {
-	unreachable := &tests.Harness{Router: tests.NewRouter(unreachablePool(t)), DB: nil}
+	unreachable := &tests.Harness{Router: tests.NewRouter(t, unreachablePool(t)), DB: nil}
 
 	rec := unreachable.GET(t, "/api/v1/health")
 

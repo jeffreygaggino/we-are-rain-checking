@@ -55,6 +55,10 @@ services:
       PORT: 8080
       PUBLIC_URL: localhost:8080
       API_BASE_PATH: /api/v1
+      # The image serves in release mode. This is a development machine, so it gets the boot output
+      # back — the route table and the debug warnings, the same opt-out DB_SSLMODE makes just above.
+      # The per-request log is not part of it: gin's logger writes in every mode.
+      GIN_MODE: debug
     ports:
       - "8080:8080"
     depends_on:

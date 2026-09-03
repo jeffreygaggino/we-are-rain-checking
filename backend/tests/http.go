@@ -30,7 +30,7 @@ func RequireHarness(t *testing.T) *Harness {
 	t.Helper()
 
 	conn, _ := RequireDB(t)
-	return &Harness{Router: NewRouter(conn), DB: conn}
+	return &Harness{Router: NewRouter(t, conn), DB: conn}
 }
 
 // RouterOnly is the same router with no database behind it, for the tests whose subject is routing
@@ -39,19 +39,36 @@ func RequireHarness(t *testing.T) *Harness {
 func RouterOnly(t *testing.T) *Harness {
 	t.Helper()
 
-	return &Harness{Router: NewRouter(nil), DB: nil}
+	return &Harness{Router: NewRouter(t, nil), DB: nil}
 }
 
 // NewRouter builds the router over an arbitrary pool, so a test can point the service at a database
-// that is not there and assert what it does about it.
-func NewRouter(conn *sqlx.DB) *gin.Engine {
+// that is not there and assert what it does about it. It trusts no proxy, which is what the deployed
+// service does when nobody names one.
+func NewRouter(t *testing.T, conn *sqlx.DB) *gin.Engine {
+	t.Helper()
+
+	return NewRouterTrusting(t, conn, nil)
+}
+
+// NewRouterTrusting is the same router with a proxy list behind it, for the tests whose subject is
+// which forwarded addresses this service believes. A list gin rejects fails the test rather than the
+// run — app.New hands the error back for exactly that reason.
+func NewRouterTrusting(t *testing.T, conn *sqlx.DB, trustedProxies []string) *gin.Engine {
+	t.Helper()
+
 	// Quiets gin, in the two places it is noisy. TestMode drops the debug route table; the discarded
 	// writer drops the per-request log lines, which come from gin.Default's logger and are not
 	// affected by the mode at all. The logger captures the writer when the router is built, so both
 	// lines must precede app.New. Errors keep their own writer, so a panic still reaches the run.
 	gin.SetMode(gin.TestMode)
 	gin.DefaultWriter = io.Discard
-	return app.New(conn)
+
+	router, err := app.New(conn, trustedProxies)
+	if err != nil {
+		t.Fatalf("building the router over %v: %v", trustedProxies, err)
+	}
+	return router
 }
 
 // GET drives the router through net/http/httptest rather than a listening socket: same handler
