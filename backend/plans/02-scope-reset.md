@@ -157,7 +157,7 @@ the reasoning recorded the way the wind edges were.
 ```
 .github/workflows/ci.yml
 
-gate      PR + push to main · mirrors `make gate` exactly · Postgres service container
+gate      PR + push to main · invokes `make gate` · Postgres from the same compose file
           → required check under branch protection
 release   main only, needs: gate · GHCR, tags sha-<short> and latest · GITHUB_TOKEN, packages: write
 deploy    main only, needs: release · tailscale/github-action, OAuth client, tag:ci
@@ -206,7 +206,7 @@ edges were. The only thing left deliberately unsettled.
 2. **Deletions and the dangling-reference fixes** — documentation only, one logical change at a time. *(done, gate green)*
 3. **Issue tracker brought in line** — #11 closed, #10 rescoped, #1 rewritten, #21 and #22 opened. *(done)*
 4. **#13** — the bug. Cheap, red-first, and it proves the loop still works before anything larger.
-5. **#21** — the gate in CI plus branch protection. Before more features, so everything after it lands green, and the required check gets seen refusing a merge while the stakes are low.
+5. **#21** — the gate in CI plus branch protection. Before more features, so everything after it lands green, and the required check gets seen refusing a merge while the stakes are low. *(workflow built — `03-gate-in-ci.md`; protection and the refused merge follow the merge)*
 6. **#7, #8, #12, #9, #10** — ingest, then production defaults, then the two remaining endpoints.
 7. **#22** — release and deploy. Last, because it needs the OAuth client, the ACL tag, the SSH key and the host, all created by hand.
 
