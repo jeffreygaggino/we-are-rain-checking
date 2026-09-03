@@ -25,6 +25,8 @@ func TestHealthReportsDatabaseConnectivityWhenPostgresIsReachable(t *testing.T) 
 	if report.Database != models.HealthOK {
 		t.Errorf("database = %q, want %q", report.Database, models.HealthOK)
 	}
+
+	t.Fatal("deliberate failure: proving the required check refuses a merge. Reverted in the next commit.")
 }
 
 // The other half of the same claim: with the database gone, the route fails. Together these two are
