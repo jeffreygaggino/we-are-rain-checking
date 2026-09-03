@@ -1,0 +1,50 @@
+# The verification gate, run where nobody has to remember to run it. See backend/plans/03-gate-in-ci.md.
+#
+# Every step that is not `make gate` exists to make `make gate` runnable. The gate's steps are named
+# in the Makefile and nowhere else: restating them here would be a second definition of "verified".
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A superseded pull request run is wasted minutes. A superseded push to main loses the record of
+# whether main was green at that commit, so those are left to finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned by go.mod rather than a literal here, which would float away from the module the first
+      # time the module is bumped.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # `make docs-check` requires the binary and refuses to guess at it. Pinned to the version go.mod
+      # already resolves for the library, so CI regenerates the spec with the tool a local run uses.
+      - name: Install swag
+        run: |
+          go install "github.com/swaggo/swag/cmd/swag@$(go list -m -f '{{.Version}}' github.com/swaggo/swag)"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # fmt-check → vet → docs-check → build → test. test brings up Postgres through the same compose
+      # file a local run uses; the runner already has Docker.
+      - name: make gate
+        run: make gate

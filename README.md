@@ -95,7 +95,7 @@ Ingest is a `cmd/` binary run on a schedule, never a route. That is what makes t
 Everything runs in GitHub Actions, because a pipeline nobody can see is a claim rather than a record.
 
 ```
-gate      PR + push to main · mirrors `make gate` exactly · Postgres service container
+gate      PR + push to main · invokes `make gate` · Postgres from the same compose file
           → required check under branch protection
 release   main only · GHCR, tagged sha-<short> and latest
 deploy    main only · Tailscale OAuth, tag:ci → SSH over the tailnet
