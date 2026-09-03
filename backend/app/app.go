@@ -34,10 +34,13 @@ func New(conn *sqlx.DB) *gin.Engine {
 func NewIngest(conn *sqlx.DB, openF1 *client.OpenF1Client) *services.IngestService {
 	// Repositories
 	circuitRepo := repository.NewCircuitRepo()
+	driverRepo := repository.NewDriverRepo()
 	meetingRepo := repository.NewMeetingRepo()
 	sessionRepo := repository.NewSessionRepo()
 	weatherRepo := repository.NewWeatherSampleRepo()
+	resultRepo := repository.NewSessionResultRepo()
 
 	// Services
-	return services.NewIngestService(conn, openF1, circuitRepo, meetingRepo, sessionRepo, weatherRepo)
+	return services.NewIngestService(conn, openF1, circuitRepo, driverRepo, meetingRepo, sessionRepo,
+		weatherRepo, resultRepo)
 }

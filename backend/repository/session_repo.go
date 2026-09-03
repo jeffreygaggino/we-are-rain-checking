@@ -43,13 +43,31 @@ func (r *SessionRepo) Upsert(ctx context.Context, db sqlx.ExtContext, s *models.
 // weather is worth fetching, and cancelled ones among them. See plans/01-backend-v1.md, "Stage 2 —
 // Weather Samples (#7)".
 //
-// Oldest first so an interrupted run leaves a contiguous prefix of the corpus behind it.
+// Oldest first so an interrupted run leaves a contiguous run of Sessions stored behind it.
 func (r *SessionRepo) CompletedKeys(ctx context.Context, db sqlx.ExtContext, asOf time.Time) ([]int, error) {
 	const q = `SELECT session_key FROM f1.sessions WHERE date_end < $1 ORDER BY date_end, session_key`
 
 	var keys []int
 	if err := sqlx.SelectContext(ctx, db, &keys, q, asOf); err != nil {
 		return nil, fmt.Errorf("session_repo.CompletedKeys: %w", err)
+	}
+	return keys, nil
+}
+
+// CompletedRaceKeys returns the Races that had ended by asOf, oldest first — the Sessions whose
+// classification is worth fetching, and cancelled ones among them, which answer 404 upstream.
+//
+// Races only, and not because practice results are uninteresting: an entry list outside a Race
+// carries names this repo does not seed — 42 of them upstream — and every one would abort a
+// run under ADR-0003's rule. See plans/04-session-results.md.
+func (r *SessionRepo) CompletedRaceKeys(ctx context.Context, db sqlx.ExtContext, asOf time.Time) ([]int, error) {
+	const q = `SELECT session_key FROM f1.sessions
+	           WHERE session_name = $1 AND date_end < $2
+	           ORDER BY date_end, session_key`
+
+	var keys []int
+	if err := sqlx.SelectContext(ctx, db, &keys, q, models.SessionNameRace, asOf); err != nil {
+		return nil, fmt.Errorf("session_repo.CompletedRaceKeys: %w", err)
 	}
 	return keys, nil
 }

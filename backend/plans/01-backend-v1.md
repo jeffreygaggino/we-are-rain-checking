@@ -6,7 +6,8 @@ this file's framing and ticket line, not its engineering.
 
 ## Status
 
-Ingest fills Meetings, Sessions and Weather Samples. Everything below the line is designed, not built.
+Ingest fills Meetings, Sessions, Weather Samples and Session Results. Everything below the line is
+designed, not built.
 
 | ticket | state |
 |---|---|
@@ -17,12 +18,14 @@ Ingest fills Meetings, Sessions and Weather Samples. Everything below the line i
 | #6 ingest Meetings and Sessions | **done** — `cmd/ingest`, the OpenF1 client, seam 2 against real Postgres with a stubbed upstream |
 | #13 empty-upstream guard | **done** — the guard asks about completed seasons only |
 | #7 ingest Weather Samples | **done** — per-Session resumption on the same seam 2 harness |
-| #8, #9, #12 | not started — see `02-scope-reset.md` |
+| #8 ingest Session Results | **done** — Races only, resolved per Session through the entry list (`04-session-results.md`) |
+| #9, #12 | not started — see `02-scope-reset.md` |
 | #10 correlation | not started, **rescoped** — Driver-Race unit, three separate axes, no pagination (`02-scope-reset.md`) |
 | #11 forecast cache | **cut** — no measurement motivated it (`02-scope-reset.md`) |
 
-Consequences for what is written below: Session Results and the endpoint table are the intended
-design and nothing more — only `/health` exists. **The cache section below is dead**; it
+Consequences for what is written below: the endpoint table is the intended design and nothing more —
+only `/health` exists. What this file says about Session Results is built, and `04-session-results.md`
+carries what stage 3 decided beyond it. **The cache section below is dead**; it
 is left in place because the reasoning that produced it is what later cut it.
 
 ## Running it
@@ -106,7 +109,7 @@ strings would prove nothing about whether re-ingest actually deduplicates.
 | constant | value | reasoning |
 |---|---|---|
 | `WetSessionThreshold` | `0.25` | CONTEXT.md: a Wet Session *exceeds* the threshold, so the comparison is `>`, and exactly-at-threshold is dry. A quarter of a session's samples means rain was a condition of the Race rather than an incident during it. Presence of any rain is explicitly not sufficient. |
-| `MinimumSampleSize` | `30` | Below ~30 observations the standard error on a rate swamps any effect this corpus could show. The measured wet corpus is 9 Races, so the honest steady state of the rainfall axis is `insufficient_sample` — that is the intended output, not a gap. |
+| `MinimumSampleSize` | `30` | Below ~30 observations the standard error on a rate swamps any effect these seasons could show. The measured wet total is 9 Races, so the honest steady state of the rainfall axis is `insufficient_sample` — that is the intended output, not a gap. |
 | wind band edges | `2 / 4 / 6` m/s | OpenF1 `wind_speed` and Open-Meteo `wind_speed_10m` are both requested in m/s, so no conversion exists to get wrong. Lower edge inclusive, upper exclusive. |
 
 Changing any of these is one edit and one failing test. That is the whole reason they are functions
@@ -121,7 +124,7 @@ taking values rather than SQL predicates.
 | `circuits` | uuid, literal | seeded | `circuit_key` unique — ingest joins on it |
 | `drivers` | uuid, literal | seeded | `full_name` unique — the only resolution key (ADR-0003) |
 | `meetings` | `meeting_key` | ingested | — |
-| `sessions` | `session_key` | ingested | `(date_start)` for next-Race; `(year, session_name)` for the corpus scan |
+| `sessions` | `session_key` | ingested | `(date_start)` for next-Race; `(year, session_name)` for the analysis scan |
 | `weather_samples` | `(session_key, observed_at)` | ingested | the PK **is** the index: session-leading composite btree serves both "samples for a Session" and "samples in a time range within a Session", which is the only way this table is read |
 | `session_results` | `(session_key, driver_id)` | ingested | PK serves by-Session; a separate `(driver_id)` index serves by-Driver, which the PK cannot because `driver_id` is the trailing column |
 
@@ -190,11 +193,11 @@ skipped, so it is always among the seasons fetched and the "at least one fetched
 false on the success path; what is left is "the season in progress returned zero Meetings", which is
 exactly a new year that has not started racing yet. On 1 January with every earlier season stored,
 ingest exited non-zero on every scheduled run until the first Meeting was published — some two months
-of false alarms a year over a healthy corpus. So the question is now asked per season, of seasons
+of false alarms a year over healthy data. So the question is now asked per season, of seasons
 strictly before the current year: one that is fetched and comes back empty fails, because nothing
 legitimate looks like that, while an empty season in progress is the ordinary state at the turn of the
 year. A misconfigured base URL still trips it on `FirstSeason`, the first season a run asks about, and
-trips it before any transaction opens rather than after four empty ones. The residual gap — a corpus
+trips it before any transaction opens rather than after four empty ones. The residual gap — a range
 whose first season *is* the current year, where no completed season exists to ask — is not worth a
 knob: `FirstSeason` is 2023 and the clock only moves away from it.
 
@@ -215,7 +218,7 @@ client boundary rather than given one.
 Measured after the first real run: **15 cancelled Sessions**, three of them Races — 2023 Emilia
 Romagna (flooding) and two 2026 rounds. They are stored, because dropping a Session upstream still
 lists would make re-ingest look like it lost rows. **#9 and #10 must filter them**: a cancelled Race
-is not the next Race, and it contributes no result to the corpus while still carrying Weather
+is not the next Race, and it contributes no result to the analysis while still carrying Weather
 Samples. This is the first thing to get wrong in either ticket.
 
 **No interface at the ingest seam.** The test substitutes the upstream with an `httptest.Server`
@@ -242,7 +245,7 @@ tickets read it.
 
 **A Session the upstream has no samples for is re-asked on every run.** It never gets rows, so the
 derived skip cannot see it — the one place this stage's resumption is weaker than stage 1's. Measured
-cost: 15 cancelled Sessions across the corpus, about 31 s of paced requests on a re-run that
+cost: 15 cancelled Sessions across the four seasons, about 31 s of paced requests on a re-run that
 otherwise makes none. A `weather_ingested_at` column would close it and would be a second source of
 truth for a fact the rows carry everywhere else, so it is parked until a re-run's cost is an actual
 complaint.
@@ -255,7 +258,7 @@ run is a one-off and its length is the upstream's rate limit, not a defect. Revi
 re-ingest ever sits on a critical path.
 
 **Rainfall is a binary presence flag, and the reader keeps it one.** Upstream sends `0` or `1` as a
-JSON number — probed across the corpus, no other value appears — and the client maps it to `bool` at
+JSON number — probed across all four seasons, no other value appears — and the client maps it to `bool` at
 the boundary so nothing downstream can read a magnitude into it. It is also the one field a missing
 value fails on rather than passing through: every claim this service makes rests on it, and a guessed
 `false` moves Wet Fraction with nothing to show for it. Temperature, humidity, pressure and wind stay
@@ -271,6 +274,13 @@ row and read by nothing. See the schema table above.
 **Samples are written one row at a time,** not as a multi-row `INSERT`. Postgres refuses to let one
 statement's `ON CONFLICT DO UPDATE` touch the same row twice, so a batch would turn a repeated `date`
 in the upstream's own response into a failed ingest rather than an idempotent write.
+
+### Stage 3 — Session Results (#8)
+
+`04-session-results.md`. Same shape as stage 2 — derived per-Session resumption, both upstream calls
+before the transaction — with one decision this file did not anticipate: the stage asks about
+**Races only**, because an entry list outside a Race carries 42 names this repo does not seed and
+each one aborts a run under ADR-0003's rule.
 
 ## Endpoints — three, per the spec
 
@@ -292,7 +302,7 @@ pointless in practice; the point is that one client-side handler works on every 
 
 **The correlation endpoint performs no inference.** Counts and rates by band with the sample size
 attached. No p-value, no confidence interval, nothing phrased as a prediction. Given nine wet Races
-across a corpus that cannot grow, its ordinary output is that no Signal is present.
+across seasons that cannot grow, its ordinary output is that no Signal is present.
 
 ## Rejected
 
