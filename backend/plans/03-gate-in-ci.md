@@ -51,7 +51,8 @@ green at that commit.
 
 The last acceptance criterion is the one that cannot be satisfied by reading the YAML. A protection
 rule that has never blocked anything is an assumption, and this repo's principle is that a result is
-not trusted until it has been seen to fail. So, in order, after this branch merges:
+not trusted until it has been seen to fail. **Done on 2026-09-03; the run links are on #21.** What was
+carried out, in order:
 
 1. **Merge this branch.** The check must exist on `main` before it can be required — a rule naming a
    check that has never run blocks every merge, including the one that would fix it.
@@ -73,12 +74,21 @@ not trusted until it has been seen to fail. So, in order, after this branch merg
    advisory to the only person who can merge. `required_pull_request_reviews: null` because there is
    nobody else to review; the gate is the reviewer this rule is enforcing.
 
-3. **Break it on purpose.** Branch, commit something the gate genuinely rejects — a `t.Fatal` in a
-   passing test, or a line of misformatted Go — and open a pull request.
-4. **Watch the merge be refused.** `gh pr checks <n>` red, and the merge button blocked rather than
-   merely discouraged. `gh pr merge <n>` should refuse.
-5. **Revert the breaking commit on that branch,** watch the check go green, and confirm the merge is
-   then allowed. The branch merges with the break reverted, not with it in the tree.
+3. **Break it on purpose.** A `t.Fatal` in `TestHealthReportsDatabaseConnectivityWhenPostgresIsReachable`
+   rather than misformatted Go, deliberately: a failing test fails at the *end* of the gate, after
+   Postgres has come up through compose and the migrations have applied, so the whole chain is what
+   gets proven rather than the first cheap step.
+4. **The merge was refused.** `gate` FAILURE, the pull request `BLOCKED`, and `gh pr merge --merge`
+   answering *"the base branch policy prohibits the merge"*.
+5. **Reverted, and the check cleared it** — green in 33s, state `CLEAN`.
+
+`--admin` override was left untested. `enforce_admins` reads `enabled: true` from the API, and the one
+way that experiment fails is by landing a broken commit on `main`.
+
+The drill's pull request was **closed unmerged rather than merged with its revert**, which is where
+this differs from what the section originally planned. Both commits cancel out, so merging them would
+leave a no-op pair in `main`'s history for a reader to work out; the closed pull request keeps the red
+run and the refusal just as permanently.
 
 Step 3 through 5 is the evidence. Without it #21 has produced a green badge over an unprotected main,
 which is decoration.
@@ -87,4 +97,4 @@ which is decoration.
 
 1. The workflow, plus this plan and the two stale "Postgres service container" lines in `README.md`
    and `02-scope-reset.md` §Pipeline that predate the compose decision recorded below them. *(done)*
-2. Merge, then steps 2–5 above. Human: needs admin on the repo.
+2. Merge, then steps 2–5 above. *(done — `main` protected, the refusal witnessed, evidence on #21)*
