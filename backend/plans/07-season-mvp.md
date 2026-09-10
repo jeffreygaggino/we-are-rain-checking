@@ -92,33 +92,60 @@ The frontend calls the current year and gets exactly what was asked for.
 A year outside the **Season Range** is a client error naming the range, not an empty list. A year
 inside it with nothing stored is an empty list — `[]`, never `null`.
 
-### Cancelled Races are excluded, on the flag and not on emptiness
+### Cancelled Races are reported, flagged, on the flag and not on emptiness
 
-`WHERE NOT s.is_cancelled`. Three seasons in four carry at least one, and without the filter the
-season table shows ghost Races — a row per cancelled Meeting with no Driver, no result and no
-weather, which reads as a bug in the endpoint rather than a Grand Prix that was called off.
+Three seasons in four carry at least one. They are **included** with `cancelled: true`, null weather
+and no results — the calendar has a slot for a Race that was called off, and omitting it leaves an
+unexplained gap between two weekends.
 
-**Not "exclude Races with zero results".** That is the display-string mistake in another form:
-inferring a state from the absence of rows rather than reading the flag that records it. The two
-coincide today and stop coinciding the moment a Race is run and its results have not landed yet —
-which is the normal state of every Sunday evening, and would silently drop a real Race from the
-table. `is_cancelled` is the stable identifier here; emptiness is a symptom.
+What the flag governs is the *results*: `WHERE NOT s.is_cancelled` on the classification query, so a
+classification attached to a Race that never ran is not read. A Race that did not happen has no
+finishers, and one appearing upstream would be an artefact.
 
-A cancelled Race is therefore absent from the response, not present-and-null. It was not run, so
-there is no Driver-Race to report.
+**Not "a Race with zero results was cancelled".** That is the display-string mistake in another form:
+inferring a state from an absence of rows rather than reading the flag that records it. The two
+coincide today and stop coinciding the moment a Race is run and its results have not landed — every
+Sunday evening — and, now that the response carries the whole calendar, for every round not yet run.
+`is_cancelled` is the stable identifier; emptiness is a symptom of at least three different things.
 
-### One row per Driver-Race
+### Races, with results nested inside them
 
-The unit `CONTEXT.md` already names. The Race and weather blocks repeat across a Race's 22 rows;
-that is the cost of the flat shape and it was chosen with that known. Estimated ~520 bytes a row,
-so a full season lands near **260 KB** — an estimate from the field list, to be measured against the
-real response before it is quoted as fact.
+**Reversed after seeing it.** This plan first specified one flat row per Driver-Race — the unit
+`CONTEXT.md` names — and it was built that way and passed the gate. Rendered as JSON the cost was
+plain: the Race block and the *entire* weather block repeated on all 22 of a Race's rows, and any
+page wanting "a Race, then its drivers" had to group by `sessionKey` itself.
+
+So the shape is a Race carrying its weather once and its Drivers' results inside it:
+
+```
+data.races[] = { sessionKey, meetingKey, raceName, dateStart, circuit…,
+                 cancelled, weather | null, results[] }
+```
+
+Three things fell out of the change rather than being designed in:
+
+1. **Cancelled Races stopped needing their own list.** The flat shape could not represent them at
+   all — a row whose unit is the Driver-Race cannot describe a Race with no Driver — so they were
+   returned as a second array beside the Driver-Races. Nested, a cancelled Race is just a Race with
+   `cancelled: true`, null weather and no results, in date order with the rest. One list, no
+   partition to keep in step.
+2. **It is a third the size.** 2026 measured at **64,971 bytes** against 189,666 flat — the
+   repetition was two thirds of the payload. The ~335 KB full-season estimate this plan carried was
+   for the flat shape and no longer applies; a full nested season is on the order of 110 KB.
+3. **The response became the whole calendar.** Dropping the inner join to results means every
+   scheduled Race is present, including rounds not yet run — 25 for 2026, where the flat shape
+   returned only the 13 that had happened. Kept deliberately: a page drawing a season wants the
+   rounds still to come.
+
+**The cost of (3), stated because it is real:** a Race that has not happened and a Race that ran an
+hour ago whose results have not been ingested are identical in this response — `cancelled: false`,
+null weather, no results. The Sunday-evening ambiguity again, now in the shape rather than in a
+filter. `dateStart` against the clock is what a caller can use to tell them apart, and #9 answers
+"what is next" properly. Revisit if the page needs the distinction server-side.
 
 **No pagination.** 02 dropped it for the bands endpoint as machinery serving a spec artifact rather
-than a caller; the same holds here with a number behind it. A season is the page — the caller asked
-for a year and a year is bounded at **506 rows** and cannot grow past 24 Races.
-`NewPaginationResponse` stays unused. Reopen if the measured response clears ~1 MB, which this shape
-cannot reach.
+than a caller; the same holds here with a number behind it. A season is the page — 25 Races, ~110 KB,
+and it cannot grow past a calendar. `NewPaginationResponse` stays unused.
 
 ### The weather block is raw, with no threshold in it
 
@@ -337,5 +364,5 @@ on purpose.
 
 **React's own choices** — TypeScript or not, router or not, data fetching by hand or with a library
 — are the page ticket's to make, not this plan's. One note that is not a preference: the season
-response is ~260 KB of JSON on one request, so whatever fetches it should render an explicit loading
+response is ~110 KB of JSON on one request (65 KB measured for 2026 so far), so whatever fetches it should render a loading
 state rather than assuming it is instant on a phone.

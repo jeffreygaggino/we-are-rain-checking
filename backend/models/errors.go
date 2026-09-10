@@ -26,6 +26,12 @@ var (
 
 	// ErrUnknownAxis is a bad request on the correlation endpoint.
 	ErrUnknownAxis = errors.New("unknown correlation axis")
+
+	// ErrSeasonOutOfRange means the year asked for is outside the Season Range — before the first
+	// season the upstream carries, or in the future. It is a bad request, deliberately not an empty
+	// list: a season that cannot exist and a season with nothing stored yet are different answers,
+	// and returning [] for both would report 2019 and next March identically.
+	ErrSeasonOutOfRange = errors.New("season outside the range this service carries")
 )
 
 // UpstreamError carries an upstream's own status and message so a handler can name the dependency

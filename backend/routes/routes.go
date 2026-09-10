@@ -15,7 +15,7 @@ import (
 
 // SetupRouter registers every route this service serves, the generated documentation included.
 // See plans/01-backend-v1.md, Deviation 7.
-func SetupRouter(healthHandler *handlers.HealthHandler) *gin.Engine {
+func SetupRouter(healthHandler *handlers.HealthHandler, seasonHandler *handlers.SeasonHandler) *gin.Engine {
 	router := gin.Default()
 
 	// Unmatched paths answer through the shared error envelope rather than gin's plain-text 404.
@@ -27,6 +27,9 @@ func SetupRouter(healthHandler *handlers.HealthHandler) *gin.Engine {
 	{
 		// Health
 		v1.GET("/health", healthHandler.GetHealth)
+
+		// Seasons
+		v1.GET("/seasons/:year/races", seasonHandler.GetSeason)
 	}
 
 	// Generated API documentation. Never hand-edited — `make docs` regenerates it.

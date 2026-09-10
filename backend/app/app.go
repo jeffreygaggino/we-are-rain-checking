@@ -23,13 +23,18 @@ import (
 // and the first handler to read ClientIP() would be tested against the wrong answer. Empty trusts
 // nothing, which makes ClientIP() the peer address rather than a caller's X-Forwarded-For.
 func New(conn *sqlx.DB, trustedProxies []string) (*gin.Engine, error) {
+	// Repositories
+	seasonRepo := repository.NewSeasonRepo()
+
 	// Services
 	healthService := services.NewHealthService(conn)
+	seasonService := services.NewSeasonService(conn, seasonRepo)
 
 	// Handlers
 	healthHandler := handlers.NewHealthHandler(healthService)
+	seasonHandler := handlers.NewSeasonHandler(seasonService)
 
-	router := routes.SetupRouter(healthHandler)
+	router := routes.SetupRouter(healthHandler, seasonHandler)
 
 	// gin validates the entries, so the loader does not: a second parser would be a second
 	// definition of "valid CIDR", free to drift from the one that actually decides.

@@ -1,5 +1,28 @@
 basePath: /api/v1
 definitions:
+  models.DriverResult:
+    properties:
+      dnf:
+        type: boolean
+      dns:
+        type: boolean
+      driverId:
+        type: string
+      dsq:
+        type: boolean
+      fullName:
+        type: string
+      numberOfLaps:
+        type: integer
+      points:
+        type: number
+      position:
+        type: integer
+      racingNumber:
+        type: integer
+      shortName:
+        type: string
+    type: object
   models.ErrorResponse:
     properties:
       code:
@@ -31,6 +54,59 @@ definitions:
         example: true
         type: boolean
     type: object
+  models.RaceWeather:
+    properties:
+      airTemperatureMeanC:
+        type: number
+      airTemperatureSampleCount:
+        type: integer
+      rainfallSampleCount:
+        type: integer
+      sampleCount:
+        type: integer
+      trackTemperatureMeanC:
+        type: number
+      trackTemperatureSampleCount:
+        type: integer
+      windSampleCount:
+        type: integer
+      windSpeedMaxMps:
+        type: number
+      windSpeedMeanMps:
+        type: number
+    type: object
+  models.Season:
+    properties:
+      races:
+        items:
+          $ref: '#/definitions/models.SeasonRace'
+        type: array
+    type: object
+  models.SeasonRace:
+    properties:
+      cancelled:
+        type: boolean
+      circuitShortName:
+        type: string
+      countryName:
+        type: string
+      dateStart:
+        type: string
+      location:
+        type: string
+      meetingKey:
+        type: integer
+      raceName:
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/models.DriverResult'
+        type: array
+      sessionKey:
+        type: integer
+      weather:
+        $ref: '#/definitions/models.RaceWeather'
+    type: object
 info:
   contact: {}
   description: An honest weather-to-results service over four F1 seasons.
@@ -60,4 +136,42 @@ paths:
       summary: Health check
       tags:
       - health
+  /seasons/{year}/races:
+    get:
+      description: 'Every Race of the season in date order, each carrying its Weather
+        Samples as raw counts and aggregates, and every Driver''s end result. No threshold
+        is applied to the weather: there is no Wet Session flag and no wind band,
+        and the caller decides what wet and windy mean. A Race that was cancelled
+        is included with cancelled=true, null weather and no results — there was nothing
+        to observe, and the calendar slot is still worth reporting. Returned whole,
+        not paged.'
+      parameters:
+      - description: Season, within the range this service carries
+        in: path
+        name: year
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/models.HttpResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.Season'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: A season's Races
+      tags:
+      - seasons
 swagger: "2.0"
