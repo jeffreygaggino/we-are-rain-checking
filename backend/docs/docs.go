@@ -52,9 +52,97 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/seasons/{year}/races": {
+            "get": {
+                "description": "Every Race of the season in date order, each carrying its Weather Samples as raw counts and aggregates, and every Driver's end result. No threshold is applied to the weather: there is no Wet Session flag and no wind band, and the caller decides what wet and windy mean. A Race that was cancelled is included with cancelled=true, null weather and no results — there was nothing to observe, and the calendar slot is still worth reporting. Returned whole, not paged.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "seasons"
+                ],
+                "summary": "A season's Races",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Season, within the range this service carries",
+                        "name": "year",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/models.HttpResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/models.Season"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
+        "models.DriverResult": {
+            "type": "object",
+            "properties": {
+                "dnf": {
+                    "type": "boolean"
+                },
+                "dns": {
+                    "type": "boolean"
+                },
+                "driverId": {
+                    "type": "string"
+                },
+                "dsq": {
+                    "type": "boolean"
+                },
+                "fullName": {
+                    "type": "string"
+                },
+                "numberOfLaps": {
+                    "type": "integer"
+                },
+                "points": {
+                    "type": "number"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "racingNumber": {
+                    "type": "integer"
+                },
+                "shortName": {
+                    "type": "string"
+                }
+            }
+        },
         "models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -96,6 +184,87 @@ const docTemplate = `{
                 "success": {
                     "type": "boolean",
                     "example": true
+                }
+            }
+        },
+        "models.RaceWeather": {
+            "type": "object",
+            "properties": {
+                "airTemperatureMeanC": {
+                    "type": "number"
+                },
+                "airTemperatureSampleCount": {
+                    "type": "integer"
+                },
+                "rainfallSampleCount": {
+                    "type": "integer"
+                },
+                "sampleCount": {
+                    "type": "integer"
+                },
+                "trackTemperatureMeanC": {
+                    "type": "number"
+                },
+                "trackTemperatureSampleCount": {
+                    "type": "integer"
+                },
+                "windSampleCount": {
+                    "type": "integer"
+                },
+                "windSpeedMaxMps": {
+                    "type": "number"
+                },
+                "windSpeedMeanMps": {
+                    "type": "number"
+                }
+            }
+        },
+        "models.Season": {
+            "type": "object",
+            "properties": {
+                "races": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.SeasonRace"
+                    }
+                }
+            }
+        },
+        "models.SeasonRace": {
+            "type": "object",
+            "properties": {
+                "cancelled": {
+                    "type": "boolean"
+                },
+                "circuitShortName": {
+                    "type": "string"
+                },
+                "countryName": {
+                    "type": "string"
+                },
+                "dateStart": {
+                    "type": "string"
+                },
+                "location": {
+                    "type": "string"
+                },
+                "meetingKey": {
+                    "type": "integer"
+                },
+                "raceName": {
+                    "type": "string"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DriverResult"
+                    }
+                },
+                "sessionKey": {
+                    "type": "integer"
+                },
+                "weather": {
+                    "$ref": "#/definitions/models.RaceWeather"
                 }
             }
         }
